@@ -29,6 +29,14 @@ __pycache__/
 build/
 dist/
 
+# Frontend dependencies, builds and logs
+node_modules/
+dist/
+dist-ssr/
+coverage/
+*.local
+*.log
+
 # OS files
 .DS_Store
 Thumbs.db

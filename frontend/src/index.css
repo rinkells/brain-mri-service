@@ -1,0 +1,4 @@
+@import 'tailwindcss';
+
+/* Dark theme is switched by the "dark" class on <html>, not only by the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));

@@ -1,0 +1,7 @@
+# Keep LF in working copies on every OS: Prettier checks for LF line endings.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pt binary
