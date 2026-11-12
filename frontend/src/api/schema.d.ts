@@ -38,6 +38,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/predictions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Історія прогнозів */
+        get: operations["list_history_predictions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/predictions/{prediction_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Один прогноз з історії */
+        get: operations["get_history_item_predictions__prediction_id__get"];
+        put?: never;
+        post?: never;
+        /** Видалити прогноз з історії */
+        delete: operations["delete_history_item_predictions__prediction_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Статистика прогнозів */
+        get: operations["stats_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -85,8 +137,74 @@ export interface components {
             /** Height */
             height: number;
         };
+        /** PredictionPage */
+        PredictionPage: {
+            /**
+             * Items
+             * @description Записи, від найновішого
+             */
+            items: components["schemas"]["PredictionRecordResponse"][];
+            /**
+             * Total
+             * @description Кількість записів, що відповідають фільтру
+             */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /**
+         * PredictionRecordResponse
+         * @description A saved prediction. The scan itself and its file name are never stored.
+         */
+        PredictionRecordResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Created At
+             * Format: date-time
+             * @description Час прогнозу в UTC
+             */
+            created_at: string;
+            /**
+             * Predicted Class
+             * @enum {string}
+             */
+            predicted_class: "glioma" | "meningioma" | "notumor" | "pituitary";
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            image_size: components["schemas"]["ImageSize"];
+            /** Warnings */
+            warnings: components["schemas"]["PredictionWarning"][];
+            /**
+             * Image Sha256
+             * @description SHA-256 завантаженого файлу (hex)
+             */
+            image_sha256: string;
+            /**
+             * Gradcam Requested
+             * @description Чи запитували теплову карту
+             */
+            gradcam_requested: boolean;
+            /**
+             * Latency Ms
+             * @description Час обробки запиту без збереження в історію, мс
+             */
+            latency_ms: number;
+        };
         /** PredictionResponse */
         PredictionResponse: {
+            /**
+             * Id
+             * @description Ідентифікатор запису в історії; null, якщо історію вимкнено або запис не вдалося зберегти
+             */
+            id: string | null;
             /**
              * Predicted Class
              * @description Клас із найбільшою ймовірністю
@@ -125,6 +243,31 @@ export interface components {
              * @description Пояснення для людини
              */
             message: string;
+        };
+        /** StatsResponse */
+        StatsResponse: {
+            /**
+             * Total
+             * @description Кількість збережених прогнозів
+             */
+            total: number;
+            /**
+             * By Class
+             * @description Кількість прогнозів для кожного класу
+             */
+            by_class: {
+                [key: string]: number;
+            };
+            /**
+             * With Warnings Share
+             * @description Частка прогнозів із попередженнями (0–1); null, якщо прогнозів немає
+             */
+            with_warnings_share: number | null;
+            /**
+             * Average Latency Ms
+             * @description Середній час обробки, мс; null, якщо прогнозів немає
+             */
+            average_latency_ms: number | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -227,6 +370,176 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_history_predictions_get: {
+        parameters: {
+            query?: {
+                /** @description Скільки записів повернути */
+                limit?: number;
+                /** @description Скільки записів пропустити */
+                offset?: number;
+                /** @description Лише прогнози цього класу */
+                predicted_class?: ("glioma" | "meningioma" | "notumor" | "pituitary") | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PredictionPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Історію вимкнено або база даних недоступна */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_history_item_predictions__prediction_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                prediction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PredictionRecordResponse"];
+                };
+            };
+            /** @description Прогнозу з таким id немає */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Історію вимкнено або база даних недоступна */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_history_item_predictions__prediction_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                prediction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Прогнозу з таким id немає */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Історію вимкнено або база даних недоступна */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    stats_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatsResponse"];
+                };
+            };
+            /** @description Історію вимкнено або база даних недоступна */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

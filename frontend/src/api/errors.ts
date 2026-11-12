@@ -1,8 +1,10 @@
 export type ApiErrorKind =
   | 'invalid-image' // 400
+  | 'not-found' // 404
   | 'too-large' // 413
   | 'unsupported-format' // 415
   | 'validation' // 422
+  | 'database-unavailable' // 503: history is disabled or its database is down
   | 'unavailable' // no connection, or the dev proxy could not reach the backend
   | 'server' // any other failure
 
@@ -41,6 +43,16 @@ export function describeError(error: unknown): ErrorDescription {
         title: 'Файл не вдалося прочитати',
         description:
           error.detail ?? 'Сервер не розпізнав файл як зображення. Можливо, файл пошкоджений.',
+      }
+    case 'not-found':
+      return {
+        title: 'Запис не знайдено',
+        description: error.detail ?? 'Можливо, його вже видалили.',
+      }
+    case 'database-unavailable':
+      return {
+        title: 'Історія недоступна',
+        description: error.detail ?? 'База даних недоступна. Спробуйте пізніше.',
       }
     case 'too-large':
       return {

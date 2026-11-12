@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
 
-import { jsonResponse, makeFile, makePrediction } from '../test/fixtures'
-import { getHealth, predict } from './client'
+import { jsonResponse, makeFile, makePage, makePrediction, makeStats } from '../test/fixtures'
+import { deletePrediction, getHealth, getStats, listPredictions, predict } from './client'
 import { ApiError, describeError } from './errors'
 
 function stubFetch(implementation: () => Response | Promise<Response>) {
@@ -113,6 +113,57 @@ test('getHealth returns the health payload', async () => {
   stubFetch(() => jsonResponse({ status: 'ok', device: 'cpu', classes: [] }))
 
   await expect(getHealth()).resolves.toEqual({ status: 'ok', device: 'cpu', classes: [] })
+})
+
+describe('history requests', () => {
+  test('listPredictions sends paging and the class filter', async () => {
+    const fetchMock = stubFetch(() => jsonResponse(makePage([])))
+
+    await listPredictions({ limit: 10, offset: 20, predictedClass: 'pituitary' })
+    await listPredictions({ limit: 5, offset: 0, predictedClass: null })
+
+    expect(fetchMock.mock.calls.map((call) => (call as unknown[])[0])).toEqual([
+      '/predictions?limit=10&offset=20&predicted_class=pituitary',
+      '/predictions?limit=5&offset=0',
+    ])
+  })
+
+  test('deletePrediction sends DELETE and accepts an empty 204', async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 204 }))
+
+    await expect(deletePrediction('abc-123')).resolves.toBeUndefined()
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/predictions/abc-123')
+    expect(init.method).toBe('DELETE')
+  })
+
+  test('getStats returns the statistics', async () => {
+    stubFetch(() => jsonResponse(makeStats()))
+
+    await expect(getStats()).resolves.toEqual(makeStats())
+  })
+
+  test('maps 404 to not-found', async () => {
+    stubFetch(() => jsonResponse({ detail: 'Прогноз не знайдено.' }, 404))
+
+    const error = await captureError(deletePrediction('missing'))
+
+    expect(error.kind).toBe('not-found')
+    expect(describeError(error)).toEqual({
+      title: 'Запис не знайдено',
+      description: 'Прогноз не знайдено.',
+    })
+  })
+
+  test('maps 503 to an unavailable history, not to a dead server', async () => {
+    stubFetch(() => jsonResponse({ detail: 'База даних недоступна. Спробуйте пізніше.' }, 503))
+
+    const error = await captureError(getStats())
+
+    expect(error.kind).toBe('database-unavailable')
+    expect(describeError(error).title).toBe('Історія недоступна')
+  })
 })
 
 describe('describeError', () => {

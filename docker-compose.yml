@@ -1,0 +1,46 @@
+# Backend and Postgres for the prediction history.
+# Usage: copy .env.example to .env, set a password, then `docker compose up --build`.
+# The frontend is not part of this file yet; run it with `npm run dev` (see README).
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Only on this machine, for running the backend outside Docker.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      MODEL_PATH: /srv/models/resnet18_v2_best.pt
+      DEVICE: ${DEVICE:-cpu}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
+      MAX_PIXELS: ${MAX_PIXELS:-16777216}
+    volumes:
+      - ./backend/models:/srv/models:ro
+    # Bring the schema up to date, then start the server.
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    ports:
+      # No authentication yet, so the API is published on localhost only.
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+
+volumes:
+  pgdata:

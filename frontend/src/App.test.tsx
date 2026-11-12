@@ -4,7 +4,16 @@ import { describe, expect, test } from 'vitest'
 
 import App from './App'
 import { formatPercent } from './lib/format'
-import { jsonResponse, makeFile, makePrediction, mockApi, predictCalls } from './test/fixtures'
+import {
+  jsonResponse,
+  makeFile,
+  makePage,
+  makePrediction,
+  makeRecord,
+  makeStats,
+  mockApi,
+  predictCalls,
+} from './test/fixtures'
 
 const SIZE_WARNING =
   'Розмір знімка 640x480, а не 512x512. На знімках іншого розміру модель працює гірше.'
@@ -302,6 +311,89 @@ describe('errors from the server', () => {
 
     expect(await screen.findByTestId('predicted-class')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
+describe('saving to history', () => {
+  test('says when the result was saved', async () => {
+    mockApi({ predict: () => jsonResponse(makePrediction()) })
+
+    await analyze()
+
+    expect(await screen.findByText(/Результат збережено в історії/)).toBeInTheDocument()
+  })
+
+  test('says when the result could not be saved', async () => {
+    mockApi({ predict: () => jsonResponse(makePrediction({ id: null })) })
+
+    await analyze()
+
+    expect(await screen.findByText(/Результат не збережено в історії/)).toBeInTheDocument()
+    expect(screen.getByTestId('predicted-class')).toHaveTextContent('Менінгіома')
+  })
+})
+
+describe('pages', () => {
+  function mockHistory() {
+    return mockApi({
+      predict: () => jsonResponse(makePrediction()),
+      predictions: () => jsonResponse(makePage([makeRecord(1)])),
+      stats: () => jsonResponse(makeStats()),
+    })
+  }
+
+  function tab(name: 'Аналіз' | 'Історія') {
+    return within(screen.getByRole('navigation', { name: 'Розділи' })).getByRole('link', { name })
+  }
+
+  test('starts on Analysis', () => {
+    mockHistory()
+
+    render(<App />)
+
+    expect(tab('Аналіз')).toHaveAttribute('aria-current', 'page')
+    expect(tab('Історія')).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('form', { name: 'Завантаження знімка' })).toBeVisible()
+  })
+
+  test('switches to History and back', async () => {
+    mockHistory()
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(tab('Історія'))
+
+    expect(await screen.findByRole('heading', { name: 'Історія прогнозів' })).toBeInTheDocument()
+    expect(tab('Історія')).toHaveAttribute('aria-current', 'page')
+    expect(window.location.hash).toBe('#/history')
+    expect(screen.queryByRole('form', { name: 'Завантаження знімка' })).not.toBeInTheDocument()
+
+    await user.click(tab('Аналіз'))
+
+    expect(await screen.findByRole('form', { name: 'Завантаження знімка' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Історія прогнозів' })).not.toBeInTheDocument()
+  })
+
+  test('opens History directly from the address', async () => {
+    mockHistory()
+    window.location.hash = '#/history'
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Історія прогнозів' })).toBeInTheDocument()
+  })
+
+  test('keeps the chosen scan and result while History is open', async () => {
+    mockHistory()
+    const user = await analyze({ file: makeFile('kept.png') })
+    await screen.findByTestId('predicted-class')
+
+    await user.click(tab('Історія'))
+    await screen.findByRole('heading', { name: 'Історія прогнозів' })
+    await user.click(tab('Аналіз'))
+
+    expect(await screen.findByText('kept.png')).toBeVisible()
+    expect(screen.getByTestId('predicted-class')).toHaveTextContent('Менінгіома')
   })
 })
 

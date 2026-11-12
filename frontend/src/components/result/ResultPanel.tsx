@@ -31,6 +31,11 @@ export function ResultPanel({ result, scanUrl }: ResultPanelProps) {
           ймовірність {formatPercent(confidence)} · знімок {result.image_size.width}×
           {result.image_size.height}
         </p>
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          {result.id
+            ? 'Результат збережено в історії (без самого знімка).'
+            : 'Результат не збережено в історії: історію вимкнено або база даних недоступна.'}
+        </p>
       </div>
 
       <WarningList warnings={result.warnings} />

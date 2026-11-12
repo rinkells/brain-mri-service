@@ -17,6 +17,9 @@ RUN grep -E '^(torch|torchvision)==' requirements.txt > torch-requirements.txt \
     && rm torch-requirements.txt
 
 COPY app ./app
+# Migrations run before the server starts (see docker-compose.yml).
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 RUN useradd --create-home --uid 10001 appuser
 USER appuser
