@@ -12,6 +12,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.clearAllMocks()
   localStorage.clear()
+  window.location.hash = ''
   document.documentElement.className = ''
   document.documentElement.removeAttribute('style')
 })

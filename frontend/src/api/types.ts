@@ -10,3 +10,7 @@ export type PredictionWarning = Schemas['PredictionWarning']
 export type ErrorResponse = Schemas['ErrorResponse']
 export type ValidationErrorResponse = Schemas['HTTPValidationError']
 export type ClassName = PredictionResponse['predicted_class']
+
+export type PredictionRecord = Schemas['PredictionRecordResponse']
+export type PredictionPage = Schemas['PredictionPage']
+export type StatsResponse = Schemas['StatsResponse']
