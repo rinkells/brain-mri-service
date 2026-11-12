@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 
-from app.config import ClassName
+from app.config import CLASS_NAMES, ClassName
 from app.database import Database
 from app.history import compute_stats, delete_prediction, list_predictions
 from app.records import PredictionRecord
@@ -48,7 +48,10 @@ def to_response(record: PredictionRecord) -> PredictionRecordResponse:
         id=record.id,
         created_at=record.created_at,
         predicted_class=record.predicted_class,
-        probabilities=record.probabilities,
+        # JSONB does not keep key order; return the classes in model order, as /predict does.
+        probabilities={
+            name: record.probabilities[name] for name in CLASS_NAMES if name in record.probabilities
+        },
         image_size=ImageSize(width=record.image_width, height=record.image_height),
         warnings=[PredictionWarning(**warning) for warning in record.warnings],
         image_sha256=record.image_sha256,

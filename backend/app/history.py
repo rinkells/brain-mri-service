@@ -1,6 +1,7 @@
 """Prediction history: saving, listing, deleting and statistics."""
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -14,6 +15,10 @@ from app.database import Database
 from app.records import PredictionRecord
 
 logger = logging.getLogger("uvicorn.error")
+
+# After a failed save, skip the database for this long. Reaching a database that is
+# down can take seconds (DNS lookup, connect timeout), and every prediction would wait.
+SAVE_RETRY_AFTER_S = 30.0
 
 
 class json_array_length(FunctionElement[int]):
@@ -37,9 +42,16 @@ def save_prediction(database: Database | None, record: PredictionRecord) -> uuid
     """Store a finished prediction and return its id.
 
     History must never break a prediction: when there is no database, or it
-    fails, the error is logged and None is returned.
+    fails, the error is logged and None is returned. After a failure the
+    database is not tried again for SAVE_RETRY_AFTER_S seconds.
     """
     if database is None:
+        return None
+    if time.monotonic() < database.saving_paused_until:
+        logger.warning(
+            "Prediction not saved: the history database failed less than %.0f s ago",
+            SAVE_RETRY_AFTER_S,
+        )
         return None
     try:
         with database.session() as session:
@@ -47,6 +59,7 @@ def save_prediction(database: Database | None, record: PredictionRecord) -> uuid
             session.commit()
             return record.id
     except Exception:
+        database.saving_paused_until = time.monotonic() + SAVE_RETRY_AFTER_S
         logger.exception("Could not save the prediction to the history database")
         return None
 

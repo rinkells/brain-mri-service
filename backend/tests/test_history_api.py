@@ -299,6 +299,39 @@ def test_history_endpoints_report_503_when_database_is_down(broken_client, metho
     assert response.json() == {"detail": "База даних недоступна. Спробуйте пізніше."}
 
 
+def test_after_a_failure_saving_is_paused(broken_client, caplog):
+    caplog.set_level(logging.WARNING)
+    post_scan(broken_client)  # fails, pauses saving
+    caplog.clear()
+
+    started = time.perf_counter()
+    response = post_scan(broken_client)
+
+    assert response.json()["id"] is None
+    assert time.perf_counter() - started < 2  # did not wait for the database again
+    assert "Prediction not saved: the history database failed less than 30 s ago" in caplog.text
+    assert "Could not save" not in caplog.text
+
+
+def test_saving_is_retried_after_the_pause(use_database, database):
+    client = use_database(database)
+    database.saving_paused_until = time.monotonic() + 30
+
+    assert post_scan(client).json()["id"] is None
+
+    database.saving_paused_until = time.monotonic() - 1  # the pause is over
+    assert post_scan(client).json()["id"] is not None
+
+
+def test_history_keeps_class_order_of_probabilities(history_client, database):
+    shuffled = {"pituitary": 0.1, "notumor": 0.2, "glioma": 0.3, "meningioma": 0.4}
+    (record_id,) = add_records(database, make_record(probabilities=shuffled))
+
+    body = history_client.get(f"/predictions/{record_id}").json()
+
+    assert list(body["probabilities"]) == ["glioma", "meningioma", "notumor", "pituitary"]
+
+
 def test_health_does_not_depend_on_the_database(broken_client):
     assert broken_client.get("/health").status_code == 200
 

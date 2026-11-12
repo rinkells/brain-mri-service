@@ -47,6 +47,9 @@ class Database:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         self._sessions = sessionmaker(engine, expire_on_commit=False)
+        # time.monotonic() value until which saving is skipped after a failure
+        # (see app.history.save_prediction).
+        self.saving_paused_until = 0.0
 
     @classmethod
     def from_url(cls, url: str) -> "Database":
