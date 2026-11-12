@@ -1,17 +1,25 @@
-"""FastAPI application: GET /health and POST /predict."""
+"""FastAPI application: health check, prediction and prediction history."""
 
+import hashlib
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
+from sqlalchemy import make_url
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
 from app.config import CLASS_NAMES, EXPECTED_IMAGE_SIZE, Settings, get_settings
+from app.database import Database
 from app.gradcam import encode_png_base64, overlay_heatmap
+from app.history import save_prediction
+from app.history_api import DATABASE_UNAVAILABLE
+from app.history_api import router as history_router
 from app.model import BrainMRIClassifier
 from app.preprocessing import (
     ImageTooLargeError,
@@ -19,6 +27,7 @@ from app.preprocessing import (
     UnsupportedFormatError,
     decode_image,
 )
+from app.records import PredictionRecord
 from app.schemas import (
     ErrorResponse,
     HealthResponse,
@@ -127,6 +136,7 @@ def predict(
     if len(data) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail=file_too_large_detail(settings))
 
+    started = time.perf_counter()
     try:
         image = decode_image(data, settings.max_pixels)
     except ImageTooLargeError as exc:
@@ -143,13 +153,37 @@ def predict(
         heatmap = encode_png_base64(overlay_heatmap(image, prediction.cam))
 
     warning = size_warning(*image.size)
+    warnings = [warning] if warning else []
+    latency_ms = (time.perf_counter() - started) * 1000
+
+    # Only the outcome is stored: never the scan itself or its file name.
+    prediction_id = save_prediction(
+        request.app.state.database,
+        PredictionRecord(
+            predicted_class=prediction.predicted_class,
+            probabilities=prediction.probabilities,
+            image_width=image.width,
+            image_height=image.height,
+            warnings=[w.model_dump() for w in warnings],
+            image_sha256=hashlib.sha256(data).hexdigest(),
+            gradcam_requested=gradcam,
+            latency_ms=latency_ms,
+        ),
+    )
+
     return PredictionResponse(
+        id=prediction_id,
         predicted_class=prediction.predicted_class,
         probabilities=prediction.probabilities,
         image_size=ImageSize(width=image.width, height=image.height),
-        warnings=[warning] if warning else [],
+        warnings=warnings,
         gradcam_png_base64=heatmap,
     )
+
+
+async def database_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error("History database error on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse({"detail": DATABASE_UNAVAILABLE}, status_code=503)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -161,7 +195,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         classifier = BrainMRIClassifier.from_file(settings.model_path, settings.device)
         app.state.classifier = classifier
         logger.info("Model loaded from %s on %s", settings.model_path, classifier.device)
-        yield
+
+        # The database is not contacted here: predictions must work even while it is down.
+        app.state.database = None
+        if settings.database_url:
+            app.state.database = Database.from_url(settings.database_url)
+            safe_url = make_url(settings.database_url).render_as_string(hide_password=True)
+            logger.info("Prediction history is stored in %s", safe_url)
+        else:
+            logger.warning("DATABASE_URL is not set: predictions will not be saved to history")
+        try:
+            yield
+        finally:
+            if app.state.database is not None:
+                app.state.database.dispose()
 
     app = FastAPI(
         title="Brain MRI classifier",
@@ -175,7 +222,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_bytes=settings.max_upload_bytes + MULTIPART_OVERHEAD_BYTES,
         detail=file_too_large_detail(settings),
     )
+    app.add_exception_handler(SQLAlchemyError, database_error_handler)
     app.include_router(router)
+    app.include_router(history_router)
     return app
 
 

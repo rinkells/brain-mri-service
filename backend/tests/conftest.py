@@ -50,5 +50,26 @@ def settings(weights_path):
 
 @pytest.fixture(scope="session")
 def client(settings):
+    """App without DATABASE_URL: predictions work, history is disabled."""
     with TestClient(create_app(settings)) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def use_database(client):
+    """Point the shared app at another history database for one test."""
+    app = client.app
+    previous = app.state.database
+
+    def use(database):
+        app.state.database = database
+        return client
+
+    yield use
+    app.state.database = previous
+
+
+@pytest.fixture
+def history_client(use_database, database):
+    """The shared app with a fresh, empty in-memory history database."""
+    return use_database(database)
