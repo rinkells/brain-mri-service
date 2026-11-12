@@ -18,7 +18,7 @@ EXPECTED_IMAGE_SIZE = (512, 512)
 
 
 class Settings(BaseSettings):
-    """Settings taken from MODEL_PATH, DEVICE, MAX_UPLOAD_MB and MAX_PIXELS."""
+    """Settings taken from MODEL_PATH, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS and DATABASE_URL."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     device: str = "cpu"
     max_upload_mb: float = Field(default=10, gt=0)
     max_pixels: int = Field(default=16_777_216, gt=0)  # 4096 x 4096
+    # SQLAlchemy URL of the prediction history, e.g.
+    # postgresql+psycopg://user:password@localhost:5432/brain_mri.
+    # Without it the service still predicts, but keeps no history.
+    database_url: str | None = None
 
     @property
     def max_upload_bytes(self) -> int:

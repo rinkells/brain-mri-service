@@ -21,6 +21,10 @@ kaggle.json
 .netrc
 .pypirc
 
+# Local SQLite databases
+*.db
+*.sqlite3
+
 # Python caches and build artefacts
 __pycache__/
 *.py[cod]

@@ -10,10 +10,21 @@ from fastapi.testclient import TestClient
 from torchvision.models import resnet18
 
 from app.config import CLASS_NAMES, Settings
+from app.database import Base, Database
 from app.main import create_app
 
 MAX_UPLOAD_MB = 1
 MAX_PIXELS = 1_000_000
+IN_MEMORY_DB = "sqlite+pysqlite:///:memory:"
+
+
+@pytest.fixture
+def database():
+    """A fresh in-memory SQLite history database; Postgres is not needed for tests."""
+    db = Database.from_url(IN_MEMORY_DB)
+    Base.metadata.create_all(db.engine)
+    yield db
+    db.dispose()
 
 
 @pytest.fixture(scope="session")

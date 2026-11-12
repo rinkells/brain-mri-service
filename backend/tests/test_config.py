@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from app.config import CLASS_NAMES, EXPECTED_IMAGE_SIZE, Settings
 
-ENV_VARS = ("MODEL_PATH", "DEVICE", "MAX_UPLOAD_MB", "MAX_PIXELS")
+ENV_VARS = ("MODEL_PATH", "DEVICE", "MAX_UPLOAD_MB", "MAX_PIXELS", "DATABASE_URL")
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +35,7 @@ def test_defaults():
     assert settings.max_upload_mb == 10
     assert settings.max_upload_bytes == 10 * 1024 * 1024
     assert settings.max_pixels == 4096 * 4096
+    assert settings.database_url is None
 
 
 def test_environment_variables_override_defaults(monkeypatch):
@@ -42,6 +43,7 @@ def test_environment_variables_override_defaults(monkeypatch):
     monkeypatch.setenv("DEVICE", "cuda:0")
     monkeypatch.setenv("MAX_UPLOAD_MB", "0.5")
     monkeypatch.setenv("MAX_PIXELS", "1000000")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@db:5432/brain_mri")
 
     settings = load_settings()
 
@@ -49,6 +51,7 @@ def test_environment_variables_override_defaults(monkeypatch):
     assert settings.device == "cuda:0"
     assert settings.max_upload_bytes == 512 * 1024
     assert settings.max_pixels == 1_000_000
+    assert settings.database_url == "postgresql+psycopg://u:p@db:5432/brain_mri"
 
 
 def test_env_file_is_read(tmp_path):
