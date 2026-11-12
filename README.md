@@ -14,19 +14,21 @@ FastAPI-сервіс приймає знімок МРТ мозку (JPEG або 
 
 ## Запуск
 
-Потрібен Python 3.12. Команди для Windows PowerShell:
+Бекенд лежить у теці `backend/`. Потрібен Python 3.12. Команди для Windows PowerShell,
+з кореня репозиторію:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
+cd backend
 uvicorn app.main:app --port 8000
 ```
 
 У Linux і macOS середовище активується командою `source .venv/bin/activate`.
 
-Перед запуском покладіть файл ваг у `models/resnet18_v2_best.pt` або вкажіть інший шлях
-у змінній `MODEL_PATH`. Без ваг сервіс не запуститься і пояснить причину.
+Перед запуском покладіть файл ваг у `backend/models/resnet18_v2_best.pt` або вкажіть інший
+шлях у змінній `MODEL_PATH`. Без ваг сервіс не запуститься і пояснить причину.
 
 Після запуску інтерактивна документація доступна на <http://127.0.0.1:8000/docs>.
 
@@ -36,7 +38,9 @@ uvicorn app.main:app --port 8000
 
 ## Налаштування
 
-Сервіс читає змінні середовища; їх також можна записати у файл `.env` у корені проєкту.
+Сервіс читає змінні середовища; їх також можна записати у файл `backend/.env` (шаблон —
+`backend/.env.example`). Відносні шляхи рахуються від теки, з якої запущено `uvicorn`,
+тобто від `backend/`.
 
 | Змінна | Типове значення | Що означає |
 |---|---|---|
@@ -149,38 +153,42 @@ Grad-CAM показує, на що зважала модель, а не межі
 ## Тести
 
 ```powershell
-pip install -r requirements-dev.txt
+pip install -r backend/requirements-dev.txt
+cd backend
 pytest
 ```
 
 Тести не потребують справжніх ваг: вони створюють ResNet18 із випадковими вагами в
 тимчасовій теці. Один тест додатково перевіряє справжні ваги, якщо файл
-`models/resnet18_v2_best.pt` є на місці, а інакше пропускається.
+`backend/models/resnet18_v2_best.pt` є на місці, а інакше пропускається.
 
 ## Docker
 
+З кореня репозиторію:
+
 ```powershell
-docker build -t brain-mri-service .
-docker run --rm -p 8000:8000 -v "${PWD}\models:/srv/models:ro" brain-mri-service
+docker build -t brain-mri-service backend
+docker run --rm -p 8000:8000 -v "${PWD}\backend\models:/srv/models:ro" brain-mri-service
 ```
 
-Образ містить PyTorch лише для CPU. Ваги в образ не потрапляють: тека `models`
+Образ містить PyTorch лише для CPU. Ваги в образ не потрапляють: тека `backend/models`
 монтується під час запуску.
 
 ## Структура проєкту
 
 ```
-app/
-  config.py         налаштування зі змінних середовища, порядок класів
-  preprocessing.py  читання файлу і передобробка знімка
-  gradcam.py        Grad-CAM і накладання теплової карти
-  model.py          завантаження ваг і класифікація
-  schemas.py        схеми відповідей
-  main.py           застосунок FastAPI: ендпоінти, обмеження розміру, помилки
-tests/              тести pytest для кожного модуля
-models/             сюди кладеться файл ваг (у git не потрапляє)
-Dockerfile
-requirements.txt, requirements-dev.txt
+backend/
+  app/
+    config.py         налаштування зі змінних середовища, порядок класів
+    preprocessing.py  читання файлу і передобробка знімка
+    gradcam.py        Grad-CAM і накладання теплової карти
+    model.py          завантаження ваг і класифікація
+    schemas.py        схеми відповідей
+    main.py           застосунок FastAPI: ендпоінти, обмеження розміру, помилки
+  tests/              тести pytest для кожного модуля
+  models/             сюди кладеться файл ваг (у git не потрапляє)
+  Dockerfile
+  requirements.txt, requirements-dev.txt
 ```
 
 ## Обмеження

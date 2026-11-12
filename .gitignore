@@ -1,7 +1,7 @@
 # Model weights are distributed separately
-models/*.pt
-models/*.pth
-models/*.onnx
+**/models/*.pt
+**/models/*.pth
+**/models/*.onnx
 
 # Virtual environment and local settings
 .venv/
