@@ -110,6 +110,26 @@ def size_warning(width: int, height: int) -> PredictionWarning | None:
     )
 
 
+LOW_CONFIDENCE = "low_confidence"
+
+
+def confidence_warning(probability: float, threshold: float) -> PredictionWarning | None:
+    """Warn when the top-1 probability is below the threshold.
+
+    The raw probability is compared, never a rounded one: 0.8999 is below 0.9 even
+    though the interface shows it as 90,0 %.
+    """
+    if probability >= threshold:
+        return None
+    return PredictionWarning(
+        code=LOW_CONFIDENCE,
+        message=(
+            "Модель недостатньо впевнена в цьому прогнозі: ймовірність передбаченого класу "
+            f"нижча за {threshold * 100:g} %."
+        ),
+    )
+
+
 @router.get("/health", response_model=HealthResponse, summary="Стан сервісу")
 def health(request: Request) -> HealthResponse:
     settings: Settings = request.app.state.settings
@@ -158,8 +178,12 @@ def predict(
     if prediction.cam is not None:
         heatmap = encode_png_base64(overlay_heatmap(image, prediction.cam))
 
-    warning = size_warning(*image.size)
-    warnings = [warning] if warning else []
+    top_probability = prediction.probabilities[prediction.predicted_class]
+    candidates = (
+        size_warning(*image.size),
+        confidence_warning(top_probability, settings.low_confidence_threshold),
+    )
+    warnings = [warning for warning in candidates if warning is not None]
     latency_ms = (time.perf_counter() - started) * 1000
 
     # Only the outcome is stored: never the scan itself or its file name.

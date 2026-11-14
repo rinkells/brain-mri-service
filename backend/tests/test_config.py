@@ -11,6 +11,7 @@ ENV_VARS = (
     "DEVICE",
     "MAX_UPLOAD_MB",
     "MAX_PIXELS",
+    "LOW_CONFIDENCE_THRESHOLD",
     "DATABASE_URL",
 )
 
@@ -43,6 +44,7 @@ def test_defaults():
     assert settings.max_upload_mb == 10
     assert settings.max_upload_bytes == 10 * 1024 * 1024
     assert settings.max_pixels == 4096 * 4096
+    assert settings.low_confidence_threshold == 0.9
     assert settings.database_url is None
 
 
@@ -52,6 +54,7 @@ def test_environment_variables_override_defaults(monkeypatch):
     monkeypatch.setenv("DEVICE", "cuda:0")
     monkeypatch.setenv("MAX_UPLOAD_MB", "0.5")
     monkeypatch.setenv("MAX_PIXELS", "1000000")
+    monkeypatch.setenv("LOW_CONFIDENCE_THRESHOLD", "0.75")
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@db:5432/brain_mri")
 
     settings = load_settings()
@@ -61,6 +64,7 @@ def test_environment_variables_override_defaults(monkeypatch):
     assert settings.device == "cuda:0"
     assert settings.max_upload_bytes == 512 * 1024
     assert settings.max_pixels == 1_000_000
+    assert settings.low_confidence_threshold == 0.75
     assert settings.database_url == "postgresql+psycopg://u:p@db:5432/brain_mri"
 
 
@@ -85,6 +89,9 @@ def test_env_file_is_read(tmp_path):
         ("MAX_PIXELS", "many"),
         ("MODEL_VERSION", ""),
         ("MODEL_VERSION", "x" * 65),
+        ("LOW_CONFIDENCE_THRESHOLD", "-0.1"),
+        ("LOW_CONFIDENCE_THRESHOLD", "1.5"),
+        ("LOW_CONFIDENCE_THRESHOLD", "high"),
     ],
 )
 def test_invalid_values_are_rejected(monkeypatch, name, value):
