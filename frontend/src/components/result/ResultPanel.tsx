@@ -1,8 +1,9 @@
 import type { PredictionResponse } from '../../api/types'
 import { CLASS_LABELS } from '../../lib/classes'
 import { formatPercent } from '../../lib/format'
-import { hasLowConfidence, LOW_CONFIDENCE } from '../../lib/warnings'
+import { groupWarnings } from '../../lib/warnings'
 import { HeatmapView } from './HeatmapView'
+import { ImageSizeNote } from './ImageSizeNote'
 import { LowConfidenceNotice } from './LowConfidenceNotice'
 import { ProbabilityBars } from './ProbabilityBars'
 import { WarningList } from './WarningList'
@@ -15,12 +16,12 @@ interface ResultPanelProps {
 export function ResultPanel({ result, scanUrl }: ResultPanelProps) {
   const predicted = result.predicted_class
   const confidence = result.probabilities[predicted] ?? 0
-  // Low confidence gets its own block above the result, so it is not listed twice.
-  const otherWarnings = result.warnings.filter((warning) => warning.code !== LOW_CONFIDENCE)
+  // Low confidence and image size have their own presentation; other codes go to the list.
+  const warnings = groupWarnings(result.warnings)
 
   return (
     <section aria-labelledby="result-heading" className="space-y-6">
-      {hasLowConfidence(result.warnings) && <LowConfidenceNotice />}
+      {warnings.lowConfidence && <LowConfidenceNotice />}
 
       <div>
         <h2
@@ -42,9 +43,10 @@ export function ResultPanel({ result, scanUrl }: ResultPanelProps) {
             ? 'Результат збережено в історії (без самого знімка).'
             : 'Результат не збережено в історії: історію вимкнено або база даних недоступна.'}
         </p>
+        {warnings.imageSize && <ImageSizeNote message={warnings.imageSize.message} />}
       </div>
 
-      <WarningList warnings={otherWarnings} />
+      <WarningList warnings={warnings.other} />
 
       <div>
         <h3 className="mb-3 font-medium">Ймовірності класів</h3>

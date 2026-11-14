@@ -2,6 +2,7 @@ export function WarningIcon() {
   return (
     <svg
       aria-hidden="true"
+      data-icon="warning"
       viewBox="0 0 24 24"
       className="mt-0.5 size-5 shrink-0 text-amber-500"
       fill="currentColor"

@@ -16,9 +16,8 @@ import {
 } from './test/fixtures'
 
 const SIZE_WARNING =
-  'Розмір знімка відрізняється від 512×512. На знімках такого формату модель менш надійна, ' +
-  'особливо для гліом (за перехресною перевіркою recall гліом цього формату ≈ 0,51 проти ' +
-  '≈ 0,99 для 512×512). Результат потребує особливої обережності.'
+  'Розмір знімка відрізняється від 512×512. Для гліом такого формату recall у перевірці був ' +
+  '≈ 0,51 (проти ≈ 0,99 для 512×512): якщо є підозра на гліому, результат менш надійний.'
 
 function analyzeButton() {
   return screen.getByRole('button', { name: 'Проаналізувати' })
@@ -216,7 +215,7 @@ describe('successful analysis', () => {
     expect(predictCalls(fetchMock)[0][0]).toBe('/predict?gradcam=true')
   })
 
-  test('shows warnings in a highlighted block', async () => {
+  test('shows an unexpected image size as a grey note, not a yellow block', async () => {
     mockApi({
       predict: () =>
         jsonResponse(
@@ -229,11 +228,24 @@ describe('successful analysis', () => {
 
     await analyze()
 
+    expect(await screen.findByRole('note')).toHaveTextContent(SIZE_WARNING)
+    expect(screen.queryByRole('heading', { name: 'Зверніть увагу' })).not.toBeInTheDocument()
+    expect(screen.getByText(/знімок 640×480/)).toBeInTheDocument()
+  })
+
+  test('shows other warnings in a highlighted block', async () => {
+    const message = 'Попередження, якого інтерфейс ще не знає.'
+    mockApi({
+      predict: () =>
+        jsonResponse(makePrediction({ warnings: [{ code: 'some_future_warning', message }] })),
+    })
+
+    await analyze()
+
     const heading = await screen.findByRole('heading', { name: 'Зверніть увагу' })
     const block = heading.closest('section')!
     expect(block).toHaveClass('bg-amber-50')
-    expect(within(block).getByText(SIZE_WARNING)).toBeInTheDocument()
-    expect(screen.getByText(/знімок 640×480/)).toBeInTheDocument()
+    expect(within(block).getByText(message)).toBeInTheDocument()
   })
 
   test('choosing another file clears the previous result', async () => {
