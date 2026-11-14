@@ -8,7 +8,7 @@ from PIL import Image
 from app.config import CLASS_NAMES, Settings
 from app.main import create_app
 from app.model import ModelLoadError
-from tests.conftest import MAX_UPLOAD_MB
+from tests.conftest import MAX_UPLOAD_MB, MODEL_VERSION
 from tests.helpers import image_bytes
 
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -52,7 +52,12 @@ def test_health(client):
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "device": "cpu", "classes": list(CLASS_NAMES)}
+    assert response.json() == {
+        "status": "ok",
+        "device": "cpu",
+        "classes": list(CLASS_NAMES),
+        "model_version": MODEL_VERSION,
+    }
 
 
 # --- POST /predict: successful requests ----------------------------------------
@@ -73,6 +78,7 @@ def test_predict_512_scan(client, fmt, filename, content_type):
     assert body["image_size"] == {"width": 512, "height": 512}
     assert body["warnings"] == []
     assert body["gradcam_png_base64"] is None
+    assert body["model_version"] == MODEL_VERSION
 
 
 @pytest.mark.parametrize("size", [(630, 630), (640, 480), (512, 511)])

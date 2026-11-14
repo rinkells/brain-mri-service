@@ -5,7 +5,14 @@ from pydantic import ValidationError
 
 from app.config import CLASS_NAMES, EXPECTED_IMAGE_SIZE, Settings
 
-ENV_VARS = ("MODEL_PATH", "DEVICE", "MAX_UPLOAD_MB", "MAX_PIXELS", "DATABASE_URL")
+ENV_VARS = (
+    "MODEL_PATH",
+    "MODEL_VERSION",
+    "DEVICE",
+    "MAX_UPLOAD_MB",
+    "MAX_PIXELS",
+    "DATABASE_URL",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +37,8 @@ def test_expected_image_size():
 def test_defaults():
     settings = load_settings()
 
-    assert settings.model_path == Path("models/resnet18_v2_best.pt")
+    assert settings.model_path == Path("models/resnet18_v2c_best.pt")
+    assert settings.model_version == "resnet18_v2c"
     assert settings.device == "cpu"
     assert settings.max_upload_mb == 10
     assert settings.max_upload_bytes == 10 * 1024 * 1024
@@ -40,6 +48,7 @@ def test_defaults():
 
 def test_environment_variables_override_defaults(monkeypatch):
     monkeypatch.setenv("MODEL_PATH", "weights/other.pt")
+    monkeypatch.setenv("MODEL_VERSION", "other_v3")
     monkeypatch.setenv("DEVICE", "cuda:0")
     monkeypatch.setenv("MAX_UPLOAD_MB", "0.5")
     monkeypatch.setenv("MAX_PIXELS", "1000000")
@@ -48,6 +57,7 @@ def test_environment_variables_override_defaults(monkeypatch):
     settings = load_settings()
 
     assert settings.model_path == Path("weights/other.pt")
+    assert settings.model_version == "other_v3"
     assert settings.device == "cuda:0"
     assert settings.max_upload_bytes == 512 * 1024
     assert settings.max_pixels == 1_000_000
@@ -73,9 +83,11 @@ def test_env_file_is_read(tmp_path):
         ("MAX_PIXELS", "0"),
         ("MAX_PIXELS", "1.5"),
         ("MAX_PIXELS", "many"),
+        ("MODEL_VERSION", ""),
+        ("MODEL_VERSION", "x" * 65),
     ],
 )
-def test_invalid_limits_are_rejected(monkeypatch, name, value):
+def test_invalid_values_are_rejected(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
 
     with pytest.raises(ValidationError):

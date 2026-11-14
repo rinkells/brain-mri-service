@@ -30,7 +30,8 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      MODEL_PATH: /srv/models/resnet18_v2_best.pt
+      MODEL_PATH: /srv/models/resnet18_v2c_best.pt
+      MODEL_VERSION: resnet18_v2c
       DEVICE: ${DEVICE:-cpu}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
       MAX_PIXELS: ${MAX_PIXELS:-16777216}

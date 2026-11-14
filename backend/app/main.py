@@ -112,8 +112,14 @@ def size_warning(width: int, height: int) -> PredictionWarning | None:
 
 @router.get("/health", response_model=HealthResponse, summary="Стан сервісу")
 def health(request: Request) -> HealthResponse:
+    settings: Settings = request.app.state.settings
     classifier: BrainMRIClassifier = request.app.state.classifier
-    return HealthResponse(status="ok", device=str(classifier.device), classes=list(CLASS_NAMES))
+    return HealthResponse(
+        status="ok",
+        device=str(classifier.device),
+        classes=list(CLASS_NAMES),
+        model_version=settings.model_version,
+    )
 
 
 @router.post(
@@ -178,6 +184,7 @@ def predict(
         image_size=ImageSize(width=image.width, height=image.height),
         warnings=warnings,
         gradcam_png_base64=heatmap,
+        model_version=settings.model_version,
     )
 
 
@@ -194,7 +201,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # A missing or incompatible weights file stops the service right at startup.
         classifier = BrainMRIClassifier.from_file(settings.model_path, settings.device)
         app.state.classifier = classifier
-        logger.info("Model loaded from %s on %s", settings.model_path, classifier.device)
+        logger.info(
+            "Model %s loaded from %s on %s",
+            settings.model_version,
+            settings.model_path,
+            classifier.device,
+        )
 
         # The database is not contacted here: predictions must work even while it is down.
         app.state.database = None

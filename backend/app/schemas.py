@@ -13,6 +13,7 @@ class HealthResponse(BaseModel):
     status: Literal["ok"]
     device: str = Field(description="Пристрій, на якому працює модель")
     classes: list[ClassName] = Field(description="Класи в порядку виходів моделі")
+    model_version: str = Field(description="Версія моделі (MODEL_VERSION)")
 
 
 class ImageSize(BaseModel):
@@ -42,6 +43,7 @@ class PredictionResponse(BaseModel):
         default=None,
         description="Теплова карта Grad-CAM поверх знімка (PNG у base64); лише з ?gradcam=true",
     )
+    model_version: str = Field(description="Версія моделі, що зробила прогноз")
 
 
 class PredictionRecordResponse(BaseModel):

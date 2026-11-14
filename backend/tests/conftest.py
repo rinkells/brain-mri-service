@@ -16,6 +16,7 @@ from app.main import create_app
 MAX_UPLOAD_MB = 1
 MAX_PIXELS = 1_000_000
 IN_MEMORY_DB = "sqlite+pysqlite:///:memory:"
+MODEL_VERSION = "test-model"
 
 
 @pytest.fixture
@@ -42,6 +43,7 @@ def settings(weights_path):
     return Settings(
         _env_file=None,
         model_path=weights_path,
+        model_version=MODEL_VERSION,
         device="cpu",
         max_upload_mb=MAX_UPLOAD_MB,
         max_pixels=MAX_PIXELS,

@@ -10,7 +10,7 @@ from app.model import BrainMRIClassifier, ModelLoadError, load_model, resolve_de
 from tests.helpers import make_image
 
 CPU = torch.device("cpu")
-REAL_WEIGHTS = Path(__file__).resolve().parents[1] / "models" / "resnet18_v2_best.pt"
+REAL_WEIGHTS = Path(__file__).resolve().parents[1] / "models" / "resnet18_v2c_best.pt"
 
 
 @pytest.fixture(scope="module")
@@ -156,7 +156,7 @@ def test_class_index_maps_to_class_name(weights_path):
         assert prediction.probabilities[name] > 0.99
 
 
-# --- Real weights (skipped when models/resnet18_v2_best.pt is absent) ----------
+# --- Real weights (skipped when models/resnet18_v2c_best.pt is absent) ---------
 
 
 @pytest.mark.skipif(not REAL_WEIGHTS.is_file(), reason="real weights are not in models/")

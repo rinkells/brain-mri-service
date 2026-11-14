@@ -25,7 +25,8 @@ RUN useradd --create-home --uid 10001 appuser
 USER appuser
 
 # The weights are not baked into the image: mount them at MODEL_PATH.
-ENV MODEL_PATH=/srv/models/resnet18_v2_best.pt \
+ENV MODEL_PATH=/srv/models/resnet18_v2c_best.pt \
+    MODEL_VERSION=resnet18_v2c \
     DEVICE=cpu
 
 EXPOSE 8000
