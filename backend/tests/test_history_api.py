@@ -8,6 +8,7 @@ import pytest
 
 from app.database import Database
 from app.records import PredictionRecord
+from tests.conftest import MODEL_VERSION
 from tests.helpers import image_bytes, make_record
 
 UNREACHABLE_POSTGRES = "postgresql+psycopg://brain_mri:secret@127.0.0.1:1/brain_mri"
@@ -63,6 +64,7 @@ def test_successful_prediction_is_saved(history_client, database):
     assert record.image_sha256 == hashlib.sha256(data).hexdigest()
     assert record.gradcam_requested is False
     assert record.latency_ms > 0
+    assert record.model_version == body["model_version"] == MODEL_VERSION
 
 
 def test_gradcam_request_is_recorded(history_client, database):
@@ -122,7 +124,9 @@ def test_list_is_newest_first_with_full_records(history_client, database):
         "image_sha256",
         "gradcam_requested",
         "latency_ms",
+        "model_version",
     }
+    assert newest["model_version"] == "resnet18_v2c"
 
 
 def test_pagination(history_client, database):

@@ -174,6 +174,7 @@ def predict(
             image_sha256=hashlib.sha256(data).hexdigest(),
             gradcam_requested=gradcam,
             latency_ms=latency_ms,
+            model_version=settings.model_version,
         ),
     )
 

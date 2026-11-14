@@ -58,6 +58,10 @@ class PredictionRecordResponse(BaseModel):
     image_sha256: str = Field(description="SHA-256 завантаженого файлу (hex)")
     gradcam_requested: bool = Field(description="Чи запитували теплову карту")
     latency_ms: float = Field(description="Час обробки запиту без збереження в історію, мс")
+    model_version: str = Field(
+        description="Версія моделі, що зробила прогноз; resnet18_v2 для записів, збережених "
+        "до появи цього поля"
+    )
 
 
 class PredictionPage(BaseModel):

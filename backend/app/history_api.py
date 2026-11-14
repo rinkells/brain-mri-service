@@ -57,6 +57,7 @@ def to_response(record: PredictionRecord) -> PredictionRecordResponse:
         image_sha256=record.image_sha256,
         gradcam_requested=record.gradcam_requested,
         latency_ms=record.latency_ms,
+        model_version=record.model_version,
     )
 
 
