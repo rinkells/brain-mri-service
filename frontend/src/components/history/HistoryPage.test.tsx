@@ -123,11 +123,65 @@ describe('table', () => {
       'Пухлини не виявленомодель resnet18_v2c',
       formatPercent(0.7),
       '640×480',
-      'Так',
+      'Нетиповий розмір',
     ])
-    expect(within(first).getByText('Так')).toHaveAttribute('title', 'Розмір знімка 640x480.')
+    expect(within(first).getByText('Нетиповий розмір')).toHaveAttribute(
+      'title',
+      'Розмір знімка 640x480.',
+    )
     expect(within(second).getByText('Гліома')).toBeInTheDocument()
     expect(within(second).getByText('Ні')).toBeInTheDocument()
+  })
+
+  test('marks warnings in yellow only for low confidence, the image size in grey', async () => {
+    const lowConfidence = { code: 'low_confidence', message: 'Модель недостатньо впевнена.' }
+    const imageSize = { code: 'unexpected_image_size', message: 'Розмір знімка не 512×512.' }
+    const records = [
+      makeRecord(4, { warnings: [lowConfidence] }),
+      makeRecord(3, { warnings: [imageSize] }),
+      makeRecord(2, { warnings: [imageSize, lowConfidence] }),
+      makeRecord(1, { warnings: [] }),
+    ]
+    mockApi({
+      predictions: () => jsonResponse(makePage(records)),
+      stats: () => jsonResponse(makeStats()),
+    })
+
+    render(<HistoryPage />)
+
+    await screen.findAllByText('Гліома')
+    const [onlyLow, onlySize, both, none] = rows().map((row) => within(row).getAllByRole('cell')[4])
+    const yellow = (cell: HTMLElement) => cell.querySelector('.bg-amber-100')
+
+    expect(yellow(onlyLow)).toHaveTextContent('Низька впевненість')
+    expect(yellow(onlyLow)).toHaveAttribute('title', lowConfidence.message)
+    expect(within(onlyLow).queryByText('Нетиповий розмір')).not.toBeInTheDocument()
+
+    expect(yellow(onlySize)).not.toBeInTheDocument()
+    const sizeMark = within(onlySize).getByText('Нетиповий розмір')
+    expect(sizeMark).toHaveClass('text-xs', 'text-slate-500')
+    expect(sizeMark).toHaveAttribute('title', imageSize.message)
+    expect(sizeMark.querySelector('[data-icon="info"]')).toBeInTheDocument()
+
+    expect(yellow(both)).toHaveTextContent('Низька впевненість')
+    expect(within(both).getByText('Нетиповий розмір')).not.toHaveClass('bg-amber-100')
+
+    expect(yellow(none)).not.toBeInTheDocument()
+    expect(none).toHaveTextContent('Ні')
+  })
+
+  test('shows warnings the interface does not know in yellow', async () => {
+    const unknown = { code: 'some_future_warning', message: 'Нове попередження.' }
+    mockApi({
+      predictions: () => jsonResponse(makePage([makeRecord(1, { warnings: [unknown] })])),
+      stats: () => jsonResponse(makeStats()),
+    })
+
+    render(<HistoryPage />)
+
+    const badge = await screen.findByText('Інше')
+    expect(badge).toHaveClass('bg-amber-100')
+    expect(badge).toHaveAttribute('title', unknown.message)
   })
 
   test('shows the model version of each prediction in small text', async () => {

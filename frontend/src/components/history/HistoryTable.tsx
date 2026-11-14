@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { PredictionRecord } from '../../api/types'
 import { CLASS_LABELS } from '../../lib/classes'
 import { formatDateTime, formatPercent } from '../../lib/format'
+import { WarningMarks } from './WarningMarks'
 
 interface HistoryTableProps {
   items: PredictionRecord[]
@@ -85,16 +86,7 @@ export function HistoryTable({ items, loading, emptyText, onDelete }: HistoryTab
                     {item.image_size.width}×{item.image_size.height}
                   </td>
                   <td className={cell}>
-                    {item.warnings.length > 0 ? (
-                      <span
-                        title={item.warnings.map((warning) => warning.message).join('\n')}
-                        className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/50 dark:text-amber-100"
-                      >
-                        Так
-                      </span>
-                    ) : (
-                      <span className="text-slate-500 dark:text-slate-400">Ні</span>
-                    )}
+                    <WarningMarks warnings={item.warnings} />
                   </td>
                   <td className={`${cell} text-right whitespace-nowrap`}>
                     {confirmingId === item.id ? (
