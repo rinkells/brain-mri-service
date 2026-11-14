@@ -1,7 +1,9 @@
 import type { PredictionResponse } from '../../api/types'
 import { CLASS_LABELS } from '../../lib/classes'
 import { formatPercent } from '../../lib/format'
+import { hasLowConfidence, LOW_CONFIDENCE } from '../../lib/warnings'
 import { HeatmapView } from './HeatmapView'
+import { LowConfidenceNotice } from './LowConfidenceNotice'
 import { ProbabilityBars } from './ProbabilityBars'
 import { WarningList } from './WarningList'
 
@@ -13,9 +15,13 @@ interface ResultPanelProps {
 export function ResultPanel({ result, scanUrl }: ResultPanelProps) {
   const predicted = result.predicted_class
   const confidence = result.probabilities[predicted] ?? 0
+  // Low confidence gets its own block above the result, so it is not listed twice.
+  const otherWarnings = result.warnings.filter((warning) => warning.code !== LOW_CONFIDENCE)
 
   return (
     <section aria-labelledby="result-heading" className="space-y-6">
+      {hasLowConfidence(result.warnings) && <LowConfidenceNotice />}
+
       <div>
         <h2
           id="result-heading"
@@ -38,7 +44,7 @@ export function ResultPanel({ result, scanUrl }: ResultPanelProps) {
         </p>
       </div>
 
-      <WarningList warnings={result.warnings} />
+      <WarningList warnings={otherWarnings} />
 
       <div>
         <h3 className="mb-3 font-medium">Ймовірності класів</h3>

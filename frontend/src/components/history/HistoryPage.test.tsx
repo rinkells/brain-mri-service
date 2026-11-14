@@ -120,7 +120,7 @@ describe('table', () => {
       .map((cell) => cell.textContent)
     expect(firstCells.slice(0, 5)).toEqual([
       formatDateTime(records[0].created_at),
-      'Пухлини не виявлено',
+      'Пухлини не виявленомодель resnet18_v2c',
       formatPercent(0.7),
       '640×480',
       'Так',
@@ -128,6 +128,25 @@ describe('table', () => {
     expect(within(first).getByText('Так')).toHaveAttribute('title', 'Розмір знімка 640x480.')
     expect(within(second).getByText('Гліома')).toBeInTheDocument()
     expect(within(second).getByText('Ні')).toBeInTheDocument()
+  })
+
+  test('shows the model version of each prediction in small text', async () => {
+    const records = [
+      makeRecord(2, { model_version: 'resnet18_v2c' }),
+      makeRecord(1, { model_version: 'resnet18_v2' }),
+    ]
+    mockApi({
+      predictions: () => jsonResponse(makePage(records)),
+      stats: () => jsonResponse(makeStats()),
+    })
+
+    render(<HistoryPage />)
+
+    const newer = await screen.findByText('модель resnet18_v2c')
+    expect(newer).toHaveClass('text-xs')
+    const [first, second] = rows()
+    expect(within(first).getByText('модель resnet18_v2c')).toBeInTheDocument()
+    expect(within(second).getByText('модель resnet18_v2')).toBeInTheDocument()
   })
 
   test('asks for the first ten records', async () => {

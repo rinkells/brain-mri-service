@@ -74,7 +74,12 @@ export function HistoryTable({ items, loading, emptyText, onDelete }: HistoryTab
                   <td className={`${cell} tabular-nums`}>
                     <time dateTime={item.created_at}>{time}</time>
                   </td>
-                  <td className={`${cell} font-medium`}>{CLASS_LABELS[item.predicted_class]}</td>
+                  <td className={cell}>
+                    <span className="font-medium">{CLASS_LABELS[item.predicted_class]}</span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">
+                      модель {item.model_version}
+                    </span>
+                  </td>
                   <td className={`${cell} tabular-nums`}>{formatPercent(confidence)}</td>
                   <td className={`${cell} tabular-nums`}>
                     {item.image_size.width}×{item.image_size.height}
