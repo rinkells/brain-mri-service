@@ -80,6 +80,12 @@ class StatsResponse(BaseModel):
     average_latency_ms: float | None = Field(
         description="Середній час обробки, мс; null, якщо прогнозів немає"
     )
+    warnings_by_code: dict[str, int] = Field(
+        description=(
+            "Кількість прогнозів із кожним кодом попередження. Прогноз із кількома "
+            "попередженнями враховується в кожному з них; відомі коди є завжди, навіть з 0"
+        )
+    )
 
 
 class ErrorResponse(BaseModel):

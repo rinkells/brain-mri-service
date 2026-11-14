@@ -20,6 +20,7 @@ const EMPTY_STATS = makeStats({
   by_class: { glioma: 0, meningioma: 0, notumor: 0, pituitary: 0 },
   with_warnings_share: null,
   average_latency_ms: null,
+  warnings_by_code: { unexpected_image_size: 0, low_confidence: 0 },
 })
 
 /** A fake history of `total` records served page by page, newest first. */
@@ -72,7 +73,7 @@ describe('statistics', () => {
 
     const total = await screen.findByText('Усього прогнозів')
     expect(total.closest('div')).toHaveTextContent('4')
-    expect(screen.getByText('З попередженнями').closest('div')).toHaveTextContent(
+    expect(screen.getByText('З будь-яким попередженням').closest('div')).toHaveTextContent(
       formatPercent(0.25),
     )
     expect(screen.getByText('Середній час обробки').closest('div')).toHaveTextContent(
@@ -92,7 +93,47 @@ describe('statistics', () => {
     render(<HistoryPage />)
 
     expect((await screen.findByText('Усього прогнозів')).closest('div')).toHaveTextContent('0')
-    expect(screen.getAllByText('—')).toHaveLength(2)
+    // Two cards and the two warning types.
+    expect(screen.getAllByText('—')).toHaveLength(4)
+    expect(screen.getByText('Низька впевненість').closest('div')).toHaveTextContent('—')
+  })
+
+  test('splits warnings by type and labels the overall share as any warning', async () => {
+    mockApi({
+      predictions: () => jsonResponse(makePage([])),
+      stats: () =>
+        jsonResponse(
+          makeStats({
+            total: 8,
+            with_warnings_share: 0.75,
+            warnings_by_code: { low_confidence: 2, unexpected_image_size: 6 },
+          }),
+        ),
+    })
+
+    render(<HistoryPage />)
+
+    const any = await screen.findByText('З будь-яким попередженням')
+    expect(any.closest('div')).toHaveTextContent(formatPercent(0.75))
+    expect(screen.queryByText('З попередженнями')).not.toBeInTheDocument()
+    expect(screen.getByText('Низька впевненість').closest('div')).toHaveTextContent(
+      `${formatPercent(0.25)} (2)`,
+    )
+    expect(screen.getByText('Нетиповий розмір знімка').closest('div')).toHaveTextContent(
+      `${formatPercent(0.75)} (6)`,
+    )
+  })
+
+  test('treats a warning code missing from the response as zero', async () => {
+    mockApi({
+      predictions: () => jsonResponse(makePage([])),
+      stats: () => jsonResponse(makeStats({ total: 4, warnings_by_code: {} })),
+    })
+
+    render(<HistoryPage />)
+
+    const row = (await screen.findByText('Низька впевненість')).closest('div')
+    expect(row).toHaveTextContent(`${formatPercent(0)} (0)`)
   })
 })
 

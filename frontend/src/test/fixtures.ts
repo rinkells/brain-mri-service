@@ -65,6 +65,7 @@ export function makeStats(overrides: Partial<StatsResponse> = {}): StatsResponse
     by_class: { glioma: 2, meningioma: 1, notumor: 1, pituitary: 0 },
     with_warnings_share: 0.25,
     average_latency_ms: 154.5,
+    warnings_by_code: { unexpected_image_size: 1, low_confidence: 0 },
     ...overrides,
   }
 }

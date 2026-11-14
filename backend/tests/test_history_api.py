@@ -233,6 +233,7 @@ def test_stats_of_empty_history(history_client):
         "by_class": {"glioma": 0, "meningioma": 0, "notumor": 0, "pituitary": 0},
         "with_warnings_share": None,
         "average_latency_ms": None,
+        "warnings_by_code": {"unexpected_image_size": 0, "low_confidence": 0},
     }
 
 
@@ -245,7 +246,82 @@ def test_stats(history_client, database):
         "by_class": {"glioma": 2, "meningioma": 0, "notumor": 1, "pituitary": 1},
         "with_warnings_share": 0.5,
         "average_latency_ms": 25.0,
+        "warnings_by_code": {"unexpected_image_size": 2, "low_confidence": 0},
     }
+
+
+SIZE_WARNING = {"code": "unexpected_image_size", "message": "Розмір знімка не 512×512."}
+LOW_CONFIDENCE_WARNING = {"code": "low_confidence", "message": "Модель недостатньо впевнена."}
+
+
+@pytest.mark.parametrize(
+    ("warnings", "by_code", "share"),
+    [
+        ([], {"unexpected_image_size": 0, "low_confidence": 0}, 0.0),
+        ([LOW_CONFIDENCE_WARNING], {"unexpected_image_size": 0, "low_confidence": 1}, 1.0),
+        (
+            [SIZE_WARNING, LOW_CONFIDENCE_WARNING],
+            {"unexpected_image_size": 1, "low_confidence": 1},
+            1.0,
+        ),
+    ],
+    ids=["no-warning", "one-code", "two-codes"],
+)
+def test_stats_count_warnings_by_code(history_client, database, warnings, by_code, share):
+    add_records(database, make_record(warnings=warnings))
+
+    stats = history_client.get("/stats").json()
+
+    assert stats["warnings_by_code"] == by_code
+    # The share still counts predictions with any warning, each of them once.
+    assert stats["with_warnings_share"] == share
+
+
+def test_stats_with_mixed_warnings_keep_the_old_fields(history_client, database):
+    add_records(
+        database,
+        make_record(predicted_class="glioma", warnings=[], latency_ms=10.0),
+        make_record(predicted_class="notumor", warnings=[SIZE_WARNING], latency_ms=20.0),
+        make_record(
+            predicted_class="notumor",
+            warnings=[SIZE_WARNING, LOW_CONFIDENCE_WARNING],
+            latency_ms=30.0,
+        ),
+        make_record(
+            predicted_class="pituitary", warnings=[LOW_CONFIDENCE_WARNING], latency_ms=40.0
+        ),
+    )
+
+    stats = history_client.get("/stats").json()
+
+    # Fields that existed before warnings_by_code have the same names, types and meaning.
+    assert {key: stats[key] for key in stats if key != "warnings_by_code"} == {
+        "total": 4,
+        "by_class": {"glioma": 1, "meningioma": 0, "notumor": 2, "pituitary": 1},
+        "with_warnings_share": 0.75,
+        "average_latency_ms": 25.0,
+    }
+    assert stats["warnings_by_code"] == {"unexpected_image_size": 2, "low_confidence": 2}
+
+
+def test_stats_count_codes_they_do_not_know(history_client, database):
+    future = {"code": "some_future_warning", "message": "Нове попередження."}
+    add_records(database, make_record(warnings=[future, SIZE_WARNING]))
+
+    assert history_client.get("/stats").json()["warnings_by_code"] == {
+        "unexpected_image_size": 1,
+        "low_confidence": 0,
+        "some_future_warning": 1,
+    }
+
+
+def test_openapi_documents_warnings_by_code(client):
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["StatsResponse"]
+
+    assert schema["properties"]["warnings_by_code"]["additionalProperties"] == {"type": "integer"}
+    assert {"total", "by_class", "with_warnings_share", "average_latency_ms"} <= set(
+        schema["required"]
+    )
 
 
 def test_stats_follow_new_predictions_and_deletes(history_client):
@@ -255,12 +331,14 @@ def test_stats_follow_new_predictions_and_deletes(history_client):
     stats = history_client.get("/stats").json()
     assert stats["total"] == 2
     assert stats["with_warnings_share"] == 0.5
+    assert stats["warnings_by_code"] == {"unexpected_image_size": 1, "low_confidence": 0}
 
     history_client.delete(f"/predictions/{created['id']}")
 
     stats = history_client.get("/stats").json()
     assert stats["total"] == 1
     assert stats["with_warnings_share"] == 0.0
+    assert stats["warnings_by_code"] == {"unexpected_image_size": 0, "low_confidence": 0}
 
 
 # --- Database unavailable or not configured ------------------------------------

@@ -283,6 +283,13 @@ export interface components {
              * @description Середній час обробки, мс; null, якщо прогнозів немає
              */
             average_latency_ms: number | null;
+            /**
+             * Warnings By Code
+             * @description Кількість прогнозів із кожним кодом попередження. Прогноз із кількома попередженнями враховується в кожному з них; відомі коди є завжди, навіть з 0
+             */
+            warnings_by_code: {
+                [key: string]: number;
+            };
         };
         /** ValidationError */
         ValidationError: {

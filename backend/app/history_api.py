@@ -115,4 +115,5 @@ def stats(session: SessionDep) -> StatsResponse:
         by_class=result.by_class,
         with_warnings_share=result.with_warnings_share,
         average_latency_ms=result.average_latency_ms,
+        warnings_by_code=result.warnings_by_code,
     )

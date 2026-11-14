@@ -18,6 +18,11 @@ CLASS_NAMES: tuple[ClassName, ...] = get_args(ClassName)
 # so a suspected glioma on such a scan is less reliable.
 EXPECTED_IMAGE_SIZE = (512, 512)
 
+# Codes of the warnings /predict returns. /stats reports each of them, even at zero.
+UNEXPECTED_IMAGE_SIZE = "unexpected_image_size"
+LOW_CONFIDENCE = "low_confidence"
+WARNING_CODES = (UNEXPECTED_IMAGE_SIZE, LOW_CONFIDENCE)
+
 
 class Settings(BaseSettings):
     """Settings taken from MODEL_PATH, MODEL_VERSION, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS,

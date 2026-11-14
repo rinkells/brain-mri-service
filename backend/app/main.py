@@ -14,7 +14,14 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
-from app.config import CLASS_NAMES, EXPECTED_IMAGE_SIZE, Settings, get_settings
+from app.config import (
+    CLASS_NAMES,
+    EXPECTED_IMAGE_SIZE,
+    LOW_CONFIDENCE,
+    UNEXPECTED_IMAGE_SIZE,
+    Settings,
+    get_settings,
+)
 from app.database import Database
 from app.gradcam import encode_png_base64, overlay_heatmap
 from app.history import save_prediction
@@ -106,10 +113,7 @@ SIZE_WARNING_MESSAGE = (
 def size_warning(width: int, height: int) -> PredictionWarning | None:
     if (width, height) == EXPECTED_IMAGE_SIZE:
         return None
-    return PredictionWarning(code="unexpected_image_size", message=SIZE_WARNING_MESSAGE)
-
-
-LOW_CONFIDENCE = "low_confidence"
+    return PredictionWarning(code=UNEXPECTED_IMAGE_SIZE, message=SIZE_WARNING_MESSAGE)
 
 
 def confidence_warning(probability: float, threshold: float) -> PredictionWarning | None:
