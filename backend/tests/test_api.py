@@ -88,9 +88,15 @@ def test_predict_warns_about_other_sizes(client, size):
     assert response.status_code == 200
     body = response.json()
     assert body["image_size"] == {"width": size[0], "height": size[1]}
-    assert [w["code"] for w in body["warnings"]] == ["unexpected_image_size"]
-    assert f"{size[0]}x{size[1]}" in body["warnings"][0]["message"]
-    assert "512x512" in body["warnings"][0]["message"]
+    assert body["warnings"] == [
+        {
+            "code": "unexpected_image_size",
+            "message": "Розмір знімка відрізняється від 512×512. На знімках такого формату "
+            "модель менш надійна, особливо для гліом (за перехресною перевіркою recall гліом "
+            "цього формату ≈ 0,51 проти ≈ 0,99 для 512×512). Результат потребує особливої "
+            "обережності.",
+        }
+    ]
 
 
 @pytest.mark.parametrize("size", [(512, 512), (640, 480)])

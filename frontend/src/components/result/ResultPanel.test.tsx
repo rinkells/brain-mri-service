@@ -12,7 +12,7 @@ const LOW_CONFIDENCE: PredictionWarning = {
 }
 const SIZE: PredictionWarning = {
   code: 'unexpected_image_size',
-  message: 'Розмір знімка 640x480, а не 512x512.',
+  message: 'Розмір знімка відрізняється від 512×512. Результат потребує особливої обережності.',
 }
 
 function renderResult(warnings: PredictionWarning[]) {

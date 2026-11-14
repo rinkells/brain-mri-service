@@ -13,7 +13,9 @@ ClassName = Literal["glioma", "meningioma", "notumor", "pituitary"]
 # (alphabetical order of the dataset folders), so it is not configurable.
 CLASS_NAMES: tuple[ClassName, ...] = get_args(ClassName)
 
-# Scan size the model is reliable on: every glioma in the training data was 512x512.
+# Scan size the model is most reliable on. Other sizes get the unexpected_image_size
+# warning: in cross-validation of resnet18_v2c, glioma recall was about 0.51 on them
+# against about 0.99 on 512x512.
 EXPECTED_IMAGE_SIZE = (512, 512)
 
 

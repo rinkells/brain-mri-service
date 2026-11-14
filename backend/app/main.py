@@ -96,18 +96,18 @@ ERROR_RESPONSES = {
 }
 
 
+# The recall figures come from the 5-fold cross-validation of resnet18_v2c (see README).
+SIZE_WARNING_MESSAGE = (
+    "Розмір знімка відрізняється від 512×512. На знімках такого формату модель менш надійна, "
+    "особливо для гліом (за перехресною перевіркою recall гліом цього формату ≈ 0,51 проти "
+    "≈ 0,99 для 512×512). Результат потребує особливої обережності."
+)
+
+
 def size_warning(width: int, height: int) -> PredictionWarning | None:
     if (width, height) == EXPECTED_IMAGE_SIZE:
         return None
-    expected = "x".join(map(str, EXPECTED_IMAGE_SIZE))
-    return PredictionWarning(
-        code="unexpected_image_size",
-        message=(
-            f"Розмір знімка {width}x{height}, а не {expected}. На знімках іншого розміру "
-            "модель працює гірше і може пропустити гліому, бо в навчальних даних усі "
-            f"гліоми були {expected}."
-        ),
-    )
+    return PredictionWarning(code="unexpected_image_size", message=SIZE_WARNING_MESSAGE)
 
 
 LOW_CONFIDENCE = "low_confidence"
