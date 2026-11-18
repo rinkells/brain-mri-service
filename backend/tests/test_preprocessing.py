@@ -200,3 +200,21 @@ def test_pixel_limit_is_checked_before_format_is_decoded():
 
     with pytest.raises(ImageTooLargeError):
         decode_image(data[: len(data) // 2], MAX_PIXELS)
+
+
+def test_decode_enforces_longer_side_limit():
+    assert decode_image(image_bytes(64, 10), MAX_PIXELS, max_side=64).size == (64, 10)
+    assert decode_image(image_bytes(10, 64), MAX_PIXELS, max_side=64).size == (10, 64)
+
+    with pytest.raises(ImageTooLargeError, match="65x10"):
+        decode_image(image_bytes(65, 10), MAX_PIXELS, max_side=64)
+    with pytest.raises(ImageTooLargeError, match="10x65"):
+        decode_image(image_bytes(10, 65), MAX_PIXELS, max_side=64)
+
+
+def test_long_thin_image_is_refused_from_its_header():
+    """16384x1024 fits into 4096 x 4096 pixels, but PadToSquare would make it 16384 x 16384."""
+    data = encode_image(Image.new("L", (16384, 1024)))
+
+    with pytest.raises(ImageTooLargeError, match="16384x1024"):
+        decode_image(data[: len(data) // 2], 4096 * 4096)

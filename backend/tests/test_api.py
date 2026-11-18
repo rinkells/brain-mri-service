@@ -1,5 +1,6 @@
 import base64
 import io
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +10,7 @@ from app.config import CLASS_NAMES, Settings
 from app.main import create_app
 from app.model import ModelLoadError, Prediction
 from tests.conftest import MAX_UPLOAD_MB, MODEL_VERSION
-from tests.helpers import image_bytes
+from tests.helpers import encode_image, image_bytes
 
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 BOUNDARY = "test-boundary"
@@ -271,6 +272,39 @@ def test_predict_rejects_too_many_pixels_with_413(client):
 
     assert response.status_code == 413
     assert "1001x1000" in response.json()["detail"]
+
+
+@pytest.fixture
+def default_pixel_limit(client, settings):
+    """The shared app with the default MAX_PIXELS (4096 x 4096) instead of the small test one."""
+    app = client.app
+    real_settings = app.state.settings
+    app.state.settings = settings.model_copy(update={"max_pixels": 4096 * 4096})
+    yield client
+    app.state.settings = real_settings
+
+
+def test_predict_rejects_long_thin_image_with_413_quickly(default_pixel_limit):
+    # Exactly 4096 x 4096 pixels, so only the side limit stops it; black compresses to a tiny file.
+    data = encode_image(Image.new("L", (16384, 1024)))
+    assert len(data) < 100_000
+
+    started = time.perf_counter()
+    response = post_image(default_pixel_limit, data)
+    elapsed = time.perf_counter() - started
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == (
+        "Зображення 16384x1024 завелике: дозволено не більше 4096 пікселів по довшій стороні."
+    )
+    assert elapsed < 2
+
+
+def test_predict_accepts_the_longest_allowed_side(default_pixel_limit):
+    response = post_image(default_pixel_limit, image_bytes(4096, 256))
+
+    assert response.status_code == 200
+    assert response.json()["image_size"] == {"width": 4096, "height": 256}
 
 
 # --- 422: request validation ---------------------------------------------------

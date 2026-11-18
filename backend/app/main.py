@@ -167,7 +167,7 @@ def predict(
 
     started = time.perf_counter()
     try:
-        image = decode_image(data, settings.max_pixels)
+        image = decode_image(data, settings.max_pixels, settings.max_image_side)
     except ImageTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except UnsupportedFormatError as exc:

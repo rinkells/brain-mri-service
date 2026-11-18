@@ -5,6 +5,8 @@ import io
 from PIL import Image
 from torchvision import transforms as T
 
+from app.config import DEFAULT_MAX_IMAGE_SIDE
+
 IMG_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
@@ -24,7 +26,7 @@ class UnsupportedFormatError(ImageError):
 
 
 class ImageTooLargeError(ImageError):
-    """The image has more pixels than MAX_PIXELS allows."""
+    """The image has more pixels than MAX_PIXELS, or a longer side than MAX_IMAGE_SIDE allows."""
 
 
 def square_padding(width: int, height: int) -> tuple[int, int]:
@@ -64,7 +66,9 @@ def build_transform() -> T.Compose:
     )
 
 
-def decode_image(data: bytes, max_pixels: int) -> Image.Image:
+def decode_image(
+    data: bytes, max_pixels: int, max_side: int = DEFAULT_MAX_IMAGE_SIDE
+) -> Image.Image:
     """Decode an uploaded JPEG or PNG into an RGB image, as the training Dataset did.
 
     The format is detected from the file content, not from its name or Content-Type.
@@ -84,11 +88,17 @@ def decode_image(data: bytes, max_pixels: int) -> Image.Image:
             f"Формат {image.format} не підтримується: потрібен JPEG або PNG."
         )
 
-    # Checked on the header, before any pixel data is decompressed.
+    # Checked on the header, before any pixel data is decompressed. The side limit
+    # also bounds the square canvas PadToSquare makes later.
     width, height = image.size
     if width * height > max_pixels:
         raise ImageTooLargeError(
             f"Зображення {width}x{height} завелике: дозволено не більше {max_pixels} пікселів."
+        )
+    if max(width, height) > max_side:
+        raise ImageTooLargeError(
+            f"Зображення {width}x{height} завелике: дозволено не більше {max_side} пікселів "
+            "по довшій стороні."
         )
 
     try:
