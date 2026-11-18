@@ -11,6 +11,9 @@ ENV_VARS = (
     "DEVICE",
     "MAX_UPLOAD_MB",
     "MAX_PIXELS",
+    "MAX_IMAGE_SIDE",
+    "MAX_CONCURRENT_INFERENCES",
+    "MAX_QUEUE",
     "LOW_CONFIDENCE_THRESHOLD",
     "DATABASE_URL",
 )
@@ -95,6 +98,48 @@ def test_env_file_is_read(tmp_path):
     ],
 )
 def test_invalid_values_are_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError):
+        load_settings()
+
+
+def test_max_image_side(monkeypatch):
+    assert load_settings().max_image_side == 4096
+
+    monkeypatch.setenv("MAX_IMAGE_SIDE", "2048")
+    assert load_settings().max_image_side == 2048
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "long"])
+def test_invalid_max_image_side_is_rejected(monkeypatch, value):
+    monkeypatch.setenv("MAX_IMAGE_SIDE", value)
+
+    with pytest.raises(ValidationError):
+        load_settings()
+
+
+def test_inference_limits(monkeypatch):
+    settings = load_settings()
+    assert (settings.max_concurrent_inferences, settings.max_queue) == (2, 20)
+
+    monkeypatch.setenv("MAX_CONCURRENT_INFERENCES", "4")
+    monkeypatch.setenv("MAX_QUEUE", "0")
+    settings = load_settings()
+    assert (settings.max_concurrent_inferences, settings.max_queue) == (4, 0)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("MAX_CONCURRENT_INFERENCES", "0"),
+        ("MAX_CONCURRENT_INFERENCES", "-1"),
+        ("MAX_CONCURRENT_INFERENCES", "two"),
+        ("MAX_QUEUE", "-1"),
+        ("MAX_QUEUE", "1.5"),
+    ],
+)
+def test_invalid_inference_limits_are_rejected(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
 
     with pytest.raises(ValidationError):

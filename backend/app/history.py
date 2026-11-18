@@ -5,7 +5,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import Integer, func, select
+from sqlalchemy import Integer, delete, func, select
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.functions import FunctionElement
@@ -84,12 +84,16 @@ def list_predictions(
 
 
 def delete_prediction(session: Session, prediction_id: uuid.UUID) -> bool:
-    record = session.get(PredictionRecord, prediction_id)
-    if record is None:
-        return False
-    session.delete(record)
+    """Delete a record; return False if there was none.
+
+    The answer comes from the rows the DELETE itself removed. Reading the record
+    first would let two simultaneous requests both see it and both report success.
+    """
+    result = session.execute(
+        delete(PredictionRecord).where(PredictionRecord.id == prediction_id)
+    )
     session.commit()
-    return True
+    return result.rowcount > 0
 
 
 @dataclass(frozen=True)
@@ -121,27 +125,33 @@ def count_warning_codes(session: Session) -> dict[str, int]:
 
 
 def compute_stats(session: Session) -> HistoryStats:
-    total = session.scalar(select(func.count()).select_from(PredictionRecord)) or 0
+    """Statistics of the whole history, all taken at the same moment.
 
-    counts = dict.fromkeys(CLASS_NAMES, 0)
-    rows = session.execute(
-        select(PredictionRecord.predicted_class, func.count()).group_by(
-            PredictionRecord.predicted_class
-        )
-    )
-    for name, count in rows:
-        counts[name] = count
+    The counts and the average come from one statement, so the total always equals the
+    sum over the classes, even while predictions are being saved. On Postgres both
+    statements also run in one REPEATABLE READ transaction, so warnings_by_code sees
+    the same records. The session must not have run anything before.
+    """
+    if session.get_bind().dialect.name == "postgresql":
+        session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
 
-    with_warnings = session.scalar(
-        select(func.count())
-        .select_from(PredictionRecord)
-        .where(json_array_length(PredictionRecord.warnings) > 0)
+    has_warnings = json_array_length(PredictionRecord.warnings) > 0
+    per_class = (
+        func.count().filter(PredictionRecord.predicted_class == name) for name in CLASS_NAMES
     )
-    average_latency = session.scalar(select(func.avg(PredictionRecord.latency_ms)))
+    row = session.execute(
+        select(
+            func.count(),
+            func.count().filter(has_warnings),
+            func.avg(PredictionRecord.latency_ms),
+            *per_class,
+        ).select_from(PredictionRecord)
+    ).one()
+    total, with_warnings, average_latency, *class_counts = row
 
     return HistoryStats(
         total=total,
-        by_class=counts,
+        by_class=dict(zip(CLASS_NAMES, class_counts)),
         with_warnings_share=with_warnings / total if total else None,
         average_latency_ms=float(average_latency) if average_latency is not None else None,
         warnings_by_code=count_warning_codes(session),

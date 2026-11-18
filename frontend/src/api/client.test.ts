@@ -69,6 +69,17 @@ describe('predict', () => {
     expect(error.detail).toBeUndefined()
   })
 
+  test('maps 503 to a busy server, not to an unavailable history', async () => {
+    const detail = 'Сервер зараз зайнятий іншими знімками. Спробуйте ще раз за кілька секунд.'
+    stubFetch(() => jsonResponse({ detail }, 503))
+
+    const error = await captureError(predict(makeFile(), { gradcam: false }))
+
+    expect(error.kind).toBe('busy')
+    expect(error.status).toBe(503)
+    expect(describeError(error)).toEqual({ title: 'Сервер зайнятий', description: detail })
+  })
+
   test('treats a network failure as an unavailable server', async () => {
     stubFetch(() => Promise.reject(new TypeError('Failed to fetch')))
 
@@ -182,6 +193,7 @@ describe('describeError', () => {
       'too-large',
       'unsupported-format',
       'validation',
+      'busy',
       'unavailable',
       'server',
     ] as const

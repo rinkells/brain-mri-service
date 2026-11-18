@@ -1,6 +1,8 @@
 import base64
 import io
+import time
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -9,7 +11,7 @@ from app.config import CLASS_NAMES, Settings
 from app.main import create_app
 from app.model import ModelLoadError, Prediction
 from tests.conftest import MAX_UPLOAD_MB, MODEL_VERSION
-from tests.helpers import image_bytes
+from tests.helpers import encode_image, image_bytes, make_image
 
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 BOUNDARY = "test-boundary"
@@ -128,6 +130,20 @@ def test_gradcam_false_returns_no_heatmap(client):
     assert response.json()["gradcam_png_base64"] is None
 
 
+def test_predict_accepts_mpo_photo_from_a_phone(client):
+    """Phones save JPEG photos as MPO (extra frames after the main one); the first is used."""
+    scan = make_image(512, 512, "RGB")
+    buffer = io.BytesIO()
+    scan.save(buffer, format="MPO", save_all=True, append_images=[scan.rotate(90)])
+    assert Image.open(io.BytesIO(buffer.getvalue())).format == "MPO"
+
+    response = post_image(client, buffer.getvalue(), "photo.jpg", "image/jpeg")
+
+    assert response.status_code == 200
+    assert response.json()["image_size"] == {"width": 512, "height": 512}
+    assert response.json()["warnings"] == []
+
+
 def test_format_is_detected_from_content_not_from_name(client):
     response = post_image(client, image_bytes(512, 512, "PNG"), "notes.txt", "text/plain")
 
@@ -236,6 +252,46 @@ def test_predict_rejects_other_formats_with_415(client, fmt):
     assert fmt in response.json()["detail"]
 
 
+def test_predict_rejects_16_bit_png_with_415(client):
+    values = np.linspace(0, 65535, 512 * 512).astype(np.uint16).reshape(512, 512)
+
+    response = post_image(client, encode_image(Image.fromarray(values)))
+
+    assert response.status_code == 415
+    assert response.json()["detail"] == (
+        "16-бітні зображення не підтримуються: експортуйте як 8-бітний PNG або JPEG."
+    )
+
+
+def test_predict_rejects_animated_png_with_415(client):
+    scan = make_image(512, 512)
+    buffer = io.BytesIO()
+    scan.save(buffer, format="PNG", save_all=True, append_images=[scan.rotate(90)])
+
+    response = post_image(client, buffer.getvalue())
+
+    assert response.status_code == 415
+    assert "кількома кадрами" in response.json()["detail"]
+
+
+def test_hidden_pixels_do_not_change_the_prediction(client):
+    """Pixels under alpha 0 are classified as the black they look like, not as what they hold."""
+    scan = np.asarray(make_image(512, 512, "RGB"))
+    noise = np.random.default_rng(0).integers(0, 256, (512, 256, 3), dtype=np.uint8)
+    alpha = np.full((512, 512), 255, dtype=np.uint8)
+    alpha[:, 256:] = 0
+    hidden = np.concatenate([scan[:, :256], noise], axis=1)
+    on_black = np.concatenate([scan[:, :256], np.zeros_like(noise)], axis=1)
+
+    transparent = post_image(client, encode_image(Image.fromarray(np.dstack([hidden, alpha]))))
+    black = post_image(client, encode_image(Image.fromarray(on_black)))
+
+    assert transparent.status_code == black.status_code == 200
+    assert transparent.json()["probabilities"] == pytest.approx(
+        black.json()["probabilities"], abs=1e-6
+    )
+
+
 # --- 413: too large ------------------------------------------------------------
 
 
@@ -271,6 +327,39 @@ def test_predict_rejects_too_many_pixels_with_413(client):
 
     assert response.status_code == 413
     assert "1001x1000" in response.json()["detail"]
+
+
+@pytest.fixture
+def default_pixel_limit(client, settings):
+    """The shared app with the default MAX_PIXELS (4096 x 4096) instead of the small test one."""
+    app = client.app
+    real_settings = app.state.settings
+    app.state.settings = settings.model_copy(update={"max_pixels": 4096 * 4096})
+    yield client
+    app.state.settings = real_settings
+
+
+def test_predict_rejects_long_thin_image_with_413_quickly(default_pixel_limit):
+    # Exactly 4096 x 4096 pixels, so only the side limit stops it; black compresses to a tiny file.
+    data = encode_image(Image.new("L", (16384, 1024)))
+    assert len(data) < 100_000
+
+    started = time.perf_counter()
+    response = post_image(default_pixel_limit, data)
+    elapsed = time.perf_counter() - started
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == (
+        "Зображення 16384x1024 завелике: дозволено не більше 4096 пікселів по довшій стороні."
+    )
+    assert elapsed < 2
+
+
+def test_predict_accepts_the_longest_allowed_side(default_pixel_limit):
+    response = post_image(default_pixel_limit, image_bytes(4096, 256))
+
+    assert response.status_code == 200
+    assert response.json()["image_size"] == {"width": 4096, "height": 256}
 
 
 # --- 422: request validation ---------------------------------------------------

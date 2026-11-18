@@ -376,7 +376,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Зображення не у форматі JPEG чи PNG */
+            /** @description Зображення не у форматі JPEG чи PNG, 16-бітне або має кілька кадрів */
             415: {
                 headers: {
                     [name: string]: unknown;
@@ -392,6 +392,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Сервер зайнятий: виконується MAX_CONCURRENT_INFERENCES прогнозів і ще MAX_QUEUE чекають; заголовок Retry-After каже, через скільки секунд повторити */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

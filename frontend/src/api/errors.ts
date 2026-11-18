@@ -4,7 +4,8 @@ export type ApiErrorKind =
   | 'too-large' // 413
   | 'unsupported-format' // 415
   | 'validation' // 422
-  | 'database-unavailable' // 503: history is disabled or its database is down
+  | 'busy' // 503 from /predict: too many scans are being analysed
+  | 'database-unavailable' // 503 from the history: it is disabled or its database is down
   | 'unavailable' // no connection, or the dev proxy could not reach the backend
   | 'server' // any other failure
 
@@ -68,6 +69,12 @@ export function describeError(error: unknown): ErrorDescription {
       return {
         title: 'Сервер не прийняв запит',
         description: 'Запит сформовано неправильно. Оберіть файл ще раз і повторіть спробу.',
+      }
+    case 'busy':
+      return {
+        title: 'Сервер зайнятий',
+        description:
+          error.detail ?? 'Зараз аналізується забагато знімків. Спробуйте за кілька секунд.',
       }
     case 'unavailable':
       return {

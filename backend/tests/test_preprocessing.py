@@ -200,3 +200,149 @@ def test_pixel_limit_is_checked_before_format_is_decoded():
 
     with pytest.raises(ImageTooLargeError):
         decode_image(data[: len(data) // 2], MAX_PIXELS)
+
+
+def test_decode_enforces_longer_side_limit():
+    assert decode_image(image_bytes(64, 10), MAX_PIXELS, max_side=64).size == (64, 10)
+    assert decode_image(image_bytes(10, 64), MAX_PIXELS, max_side=64).size == (10, 64)
+
+    with pytest.raises(ImageTooLargeError, match="65x10"):
+        decode_image(image_bytes(65, 10), MAX_PIXELS, max_side=64)
+    with pytest.raises(ImageTooLargeError, match="10x65"):
+        decode_image(image_bytes(10, 65), MAX_PIXELS, max_side=64)
+
+
+def test_long_thin_image_is_refused_from_its_header():
+    """16384x1024 fits into 4096 x 4096 pixels, but PadToSquare would make it 16384 x 16384."""
+    data = encode_image(Image.new("L", (16384, 1024)))
+
+    with pytest.raises(ImageTooLargeError, match="16384x1024"):
+        decode_image(data[: len(data) // 2], 4096 * 4096)
+
+
+# --- Pixel formats convert("RGB") would distort ---------------------------------
+
+HIGH_BIT_DEPTH_MESSAGE = (
+    "16-бітні зображення не підтримуються: експортуйте як 8-бітний PNG або JPEG."
+)
+
+
+def sixteen_bit_png(max_value: int = 65535) -> bytes:
+    """A 16-bit greyscale gradient; Pillow opens such a PNG in mode I;16."""
+    values = np.linspace(0, max_value, 64 * 64).astype(np.uint16).reshape(64, 64)
+    return encode_image(Image.fromarray(values))
+
+
+@pytest.mark.parametrize("max_value", [65535, 4095], ids=["16-bit", "12-bit-in-16"])
+def test_decode_rejects_16_bit_png(max_value):
+    data = sixteen_bit_png(max_value)
+    assert Image.open(io.BytesIO(data)).mode == "I;16"
+
+    with pytest.raises(UnsupportedFormatError) as error:
+        decode_image(data, MAX_PIXELS)
+
+    assert str(error.value) == HIGH_BIT_DEPTH_MESSAGE
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
+def test_decode_rejects_every_high_bit_depth_mode(monkeypatch, mode):
+    """A PNG only opens as I;16 today; a stand-in image covers the other wide modes."""
+    stand_in = Image.new(mode, (64, 64))
+    stand_in.format = "PNG"
+    monkeypatch.setattr(Image, "open", lambda fp: stand_in)
+
+    with pytest.raises(UnsupportedFormatError, match="16-бітні"):
+        decode_image(b"a PNG in a wide mode", MAX_PIXELS)
+
+
+def animated_png(frames: int = 2) -> bytes:
+    images = [make_image(64, 64).rotate(90 * index) for index in range(frames)]
+    buffer = io.BytesIO()
+    images[0].save(buffer, format="PNG", save_all=True, append_images=images[1:])
+    return buffer.getvalue()
+
+
+def mpo_bytes(width: int = 320, height: int = 240) -> bytes:
+    """A real MPO file, as phone cameras write it: two JPEG frames and an MP index ("MPF").
+    The second frame is plain white, so it is easy to tell which one was read."""
+    first = make_image(width, height, "RGB")
+    second = Image.new("RGB", (width, height), (255, 255, 255))
+    buffer = io.BytesIO()
+    first.save(buffer, format="MPO", save_all=True, append_images=[second])
+    return buffer.getvalue()
+
+
+def test_decode_accepts_mpo_and_reads_its_first_frame():
+    data = mpo_bytes()
+    opened = Image.open(io.BytesIO(data))
+    assert (opened.format, opened.n_frames) == ("MPO", 2)
+    assert b"MPF\x00" in data
+
+    decoded = decode_image(data, MAX_PIXELS)
+
+    first_frame = Image.open(io.BytesIO(data)).convert("RGB")  # as the training loader reads it
+    assert decoded.size == (320, 240)
+    assert np.array_equal(np.asarray(decoded), np.asarray(first_frame))
+    assert np.asarray(decoded).mean() < 200  # not the white second frame
+
+
+def test_decode_rejects_animated_png():
+    data = animated_png()
+    assert Image.open(io.BytesIO(data)).n_frames == 2
+
+    with pytest.raises(UnsupportedFormatError, match="кількома кадрами"):
+        decode_image(data, MAX_PIXELS)
+
+
+def rgba_with_hidden_pixels() -> Image.Image:
+    """Left half: an opaque scan. Right half: bright pixels hidden under alpha 0.
+    One column in the middle is half transparent."""
+    pixels = np.zeros((64, 64, 4), dtype=np.uint8)
+    pixels[..., :3] = np.asarray(make_image(64, 64, "RGB"))
+    pixels[:, :32, 3] = 255
+    pixels[:, 32:, :3] = 250
+    pixels[:, 32, 3] = 128
+    return Image.fromarray(pixels)
+
+
+def test_transparent_pixels_become_black():
+    image = rgba_with_hidden_pixels()
+    rgb = np.asarray(image)[..., :3].astype(int)
+
+    decoded = np.asarray(decode_image(encode_image(image), MAX_PIXELS)).astype(int)
+
+    assert np.array_equal(decoded[:, :32], rgb[:, :32])
+    assert np.abs(decoded[:, 32] - np.rint(rgb[:, 32] * 128 / 255)).max() <= 1
+    assert (decoded[:, 33:] == 0).all()
+
+
+def test_opaque_rgba_decodes_exactly_like_convert_rgb():
+    """Fully opaque RGBA must give the very pixels training's convert('RGB') gave."""
+    data = image_bytes(96, 80, "PNG", "RGBA")
+    expected = Image.open(io.BytesIO(data)).convert("RGB")
+
+    assert np.array_equal(np.asarray(decode_image(data, MAX_PIXELS)), np.asarray(expected))
+
+
+@pytest.mark.parametrize("mode", ["LA", "P"])
+def test_transparency_is_honoured_in_other_modes(mode):
+    """Grey with alpha, and a palette PNG whose bright colour is marked transparent (tRNS)."""
+    grey = np.full((16, 16), 200, dtype=np.uint8)
+    grey[:, 8:] = 250  # hidden on the right
+    buffer = io.BytesIO()
+    if mode == "LA":
+        alpha = np.full_like(grey, 255)
+        alpha[:, 8:] = 0
+        Image.fromarray(np.dstack([grey, alpha])).save(buffer, format="PNG")
+    else:
+        palette_image = Image.fromarray(grey).convert("P")
+        hidden_index = palette_image.getpixel((15, 0))
+        palette_image.save(buffer, format="PNG", transparency=hidden_index)
+    opened = Image.open(io.BytesIO(buffer.getvalue()))
+    assert opened.mode == mode
+    assert np.asarray(opened.convert("RGB"))[0, 15, 0] == 250  # what convert("RGB") alone shows
+
+    decoded = np.asarray(decode_image(buffer.getvalue(), MAX_PIXELS))
+
+    assert (decoded[:, :8] == 200).all()
+    assert (decoded[:, 8:] == 0).all()

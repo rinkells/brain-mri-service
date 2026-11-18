@@ -1,12 +1,19 @@
 import hashlib
 import logging
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import event
+from sqlalchemy.exc import DataError, OperationalError, ProgrammingError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+from sqlalchemy.orm import Session
 
-from app.database import Database
+from app.database import Base, Database, create_db_engine
+from app.history import compute_stats
 from app.records import PredictionRecord
 from tests.conftest import MODEL_VERSION
 from tests.helpers import image_bytes, make_record
@@ -180,6 +187,66 @@ def test_invalid_list_parameters_are_422(history_client, params):
     assert history_client.get("/predictions", params=params).status_code == 422
 
 
+@pytest.mark.parametrize("offset", [1_000_001, 9223372036854775808, 10**30])
+def test_offset_beyond_the_limit_is_422(history_client, offset):
+    """9223372036854775808 is one more than the largest BIGINT Postgres takes for OFFSET."""
+    response = history_client.get("/predictions", params={"offset": offset})
+
+    assert response.status_code == 422
+
+
+def test_largest_allowed_offset(history_client):
+    response = history_client.get("/predictions", params={"offset": 1_000_000})
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+
+
+def failing_query(error: Exception):
+    def query(*args, **kwargs):
+        raise error
+
+    return query
+
+
+def test_value_the_database_rejects_is_422_not_503(history_client, monkeypatch):
+    error = DataError("SELECT ...", {}, Exception("bigint out of range"))
+    monkeypatch.setattr("app.history_api.list_predictions", failing_query(error))
+
+    response = history_client.get("/predictions")
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "База даних не прийняла значення із запиту. Перевірте параметри."
+    }
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OperationalError("SELECT 1", {}, Exception("connection refused")),
+        SQLAlchemyTimeoutError("QueuePool limit of size 5 overflow 10 reached"),
+    ],
+    ids=["connection-lost", "no-free-connection"],
+)
+def test_connection_problems_stay_503(history_client, monkeypatch, error):
+    monkeypatch.setattr("app.history_api.list_predictions", failing_query(error))
+
+    response = history_client.get("/predictions")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "База даних недоступна. Спробуйте пізніше."}
+
+
+def test_other_database_errors_are_not_reported_as_unavailable(history_client, monkeypatch):
+    """A bug in a query must surface as a server error, not hide behind 'try again later'."""
+    error = ProgrammingError("SELECT nonsense", {}, Exception("syntax error"))
+    monkeypatch.setattr("app.history_api.list_predictions", failing_query(error))
+
+    with pytest.raises(ProgrammingError):
+        history_client.get("/predictions")
+
+
 # --- GET and DELETE /predictions/{id} ------------------------------------------
 
 
@@ -222,6 +289,35 @@ def test_delete_twice_is_404(history_client, database):
 
     assert history_client.delete(f"/predictions/{record_id}").status_code == 204
     assert history_client.delete(f"/predictions/{record_id}").status_code == 404
+
+
+def test_parallel_deletes_of_one_record_succeed_only_once(use_database, tmp_path):
+    """Two DELETE requests for the same id reach the database at the same moment.
+
+    A file database gives each request its own connection. Both requests are held just
+    before their DELETE statement until the other one gets there too, so both have done
+    whatever they do before deleting (e.g. read the record) when the first delete runs.
+    """
+    database = Database.from_url(f"sqlite:///{(tmp_path / 'history.db').as_posix()}")
+    Base.metadata.create_all(database.engine)
+    (record_id,) = add_records(database, make_record())
+    both_ready = threading.Barrier(2, timeout=5)
+
+    @event.listens_for(database.engine, "before_cursor_execute")
+    def wait_for_the_other_delete(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("DELETE"):
+            both_ready.wait()
+
+    client = use_database(database)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(
+                pool.map(lambda _: client.delete(f"/predictions/{record_id}"), range(2))
+            )
+    finally:
+        database.dispose()
+
+    assert sorted(response.status_code for response in responses) == [204, 404]
 
 
 # --- GET /stats ----------------------------------------------------------------
@@ -313,6 +409,55 @@ def test_stats_count_codes_they_do_not_know(history_client, database):
         "low_confidence": 0,
         "some_future_warning": 1,
     }
+
+
+def test_stats_add_up_while_predictions_are_being_saved(use_database, tmp_path):
+    """A prediction is saved between two statements of /stats. All the numbers in the
+    answer must still describe the same moment: the total is the sum over the classes."""
+    url = f"sqlite:///{(tmp_path / 'history.db').as_posix()}"
+    database, writer = Database.from_url(url), Database.from_url(url)
+    Base.metadata.create_all(database.engine)
+    add_records(database, *records_at("glioma", "notumor", "pituitary", warnings_from=1))
+    statements = []
+
+    @event.listens_for(database.engine, "before_cursor_execute")
+    def save_a_prediction_meanwhile(conn, cursor, statement, *args):
+        statements.append(statement)
+        if len(statements) == 2:
+            add_records(writer, make_record(predicted_class="meningioma", warnings=[]))
+
+    client = use_database(database)
+    try:
+        stats = client.get("/stats").json()
+    finally:
+        database.dispose()
+        writer.dispose()
+
+    assert len(statements) >= 2  # the record really was saved in the middle of /stats
+    assert stats["total"] == sum(stats["by_class"].values())
+    assert stats["with_warnings_share"] == pytest.approx(2 / stats["total"])
+    assert stats["warnings_by_code"]["unexpected_image_size"] == 2
+
+
+def test_stats_read_one_snapshot_on_postgres(monkeypatch):
+    """On Postgres every statement of /stats runs in one REPEATABLE READ transaction, so
+    warnings_by_code, read by a second statement, matches the other numbers."""
+    session = Session(create_db_engine("postgresql+psycopg://u:p@127.0.0.1:1/brain_mri"))
+    requested = []
+
+    class Stop(Exception):
+        """Raised instead of connecting: only the requested isolation level matters."""
+
+    def connection(execution_options=None, **kwargs):
+        requested.append(execution_options)
+        raise Stop
+
+    monkeypatch.setattr(session, "connection", connection)
+
+    with pytest.raises(Stop):
+        compute_stats(session)
+
+    assert requested == [{"isolation_level": "REPEATABLE READ"}]
 
 
 def test_openapi_documents_warnings_by_code(client):

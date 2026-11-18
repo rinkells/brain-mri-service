@@ -5,10 +5,25 @@ import io
 from PIL import Image
 from torchvision import transforms as T
 
+from app.config import DEFAULT_MAX_IMAGE_SIDE
+
 IMG_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
-ALLOWED_FORMATS = ("JPEG", "PNG")
+# MPO is how phone cameras save JPEG photos: the photo itself is the first frame,
+# followed by previews or a stereo pair. Only that first frame is read.
+ALLOWED_FORMATS = ("JPEG", "MPO", "PNG")
+
+# Modes with more than 8 bits per channel. convert("RGB") clips them to 0..255
+# instead of scaling, so a 16-bit greyscale PNG would turn almost entirely white.
+HIGH_BIT_DEPTH_MODES = frozenset({"I", "I;16", "I;16L", "I;16B", "I;16N", "F"})
+HIGH_BIT_DEPTH_MESSAGE = (
+    "16-бітні зображення не підтримуються: експортуйте як 8-бітний PNG або JPEG."
+)
+MULTI_FRAME_MESSAGE = (
+    "Зображення з кількома кадрами (анімований PNG) не підтримуються: збережіть знімок "
+    "як звичайний PNG або JPEG."
+)
 
 
 class ImageError(Exception):
@@ -20,11 +35,11 @@ class NotAnImageError(ImageError):
 
 
 class UnsupportedFormatError(ImageError):
-    """The file is an image, but neither JPEG nor PNG."""
+    """The file is an image, but not a single 8-bit JPEG or PNG frame."""
 
 
 class ImageTooLargeError(ImageError):
-    """The image has more pixels than MAX_PIXELS allows."""
+    """The image has more pixels than MAX_PIXELS, or a longer side than MAX_IMAGE_SIDE allows."""
 
 
 def square_padding(width: int, height: int) -> tuple[int, int]:
@@ -64,8 +79,10 @@ def build_transform() -> T.Compose:
     )
 
 
-def decode_image(data: bytes, max_pixels: int) -> Image.Image:
-    """Decode an uploaded JPEG or PNG into an RGB image, as the training Dataset did.
+def decode_image(
+    data: bytes, max_pixels: int, max_side: int = DEFAULT_MAX_IMAGE_SIDE
+) -> Image.Image:
+    """Decode an uploaded JPEG (or MPO) or PNG into an RGB image, as the training Dataset did.
 
     The format is detected from the file content, not from its name or Content-Type.
     """
@@ -84,14 +101,43 @@ def decode_image(data: bytes, max_pixels: int) -> Image.Image:
             f"Формат {image.format} не підтримується: потрібен JPEG або PNG."
         )
 
-    # Checked on the header, before any pixel data is decompressed.
+    # Checked on the header, before any pixel data is decompressed. The side limit
+    # also bounds the square canvas PadToSquare makes later.
     width, height = image.size
     if width * height > max_pixels:
         raise ImageTooLargeError(
             f"Зображення {width}x{height} завелике: дозволено не більше {max_pixels} пікселів."
         )
+    if max(width, height) > max_side:
+        raise ImageTooLargeError(
+            f"Зображення {width}x{height} завелике: дозволено не більше {max_side} пікселів "
+            "по довшій стороні."
+        )
+
+    if image.mode in HIGH_BIT_DEPTH_MODES:
+        raise UnsupportedFormatError(HIGH_BIT_DEPTH_MESSAGE)
+    # Otherwise only the first frame of an animated PNG would be classified, silently.
+    # An MPO is a JPEG photo whose extra frames are not part of the picture.
+    if image.format != "MPO" and getattr(image, "n_frames", 1) > 1:
+        raise UnsupportedFormatError(MULTI_FRAME_MESSAGE)
 
     try:
-        return image.convert("RGB")
+        return to_rgb(image)
     except Exception as exc:
         raise NotAnImageError("Зображення пошкоджене, його не вдалося прочитати.") from exc
+
+
+def to_rgb(image: Image.Image) -> Image.Image:
+    """convert("RGB"), except that transparent pixels become the black they look like.
+
+    convert("RGB") alone drops the alpha channel and so shows whatever colours the
+    transparent pixels hold. Images without transparency (every JPEG, most PNGs) take
+    the plain convert("RGB") path, exactly as in training; on fully opaque pixels the
+    result is identical either way.
+    """
+    if not image.has_transparency_data:
+        return image.convert("RGB")
+    rgba = image.convert("RGBA")
+    canvas = Image.new("RGB", rgba.size, (0, 0, 0))
+    canvas.paste(rgba, mask=rgba.getchannel("A"))
+    return canvas
