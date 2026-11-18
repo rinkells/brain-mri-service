@@ -60,8 +60,9 @@ def test_database_container_has_memory_and_process_limits_only(services):
 # --- Docker image --------------------------------------------------------------
 
 DOCKERFILE = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
-# Lowest versions without the CVEs found in the tooling of the base image:
-# pip CVE-2025-8869; setuptools CVE-2024-6345 and CVE-2025-47273.
+# Lowest versions without known CVEs: pip CVE-2025-8869 (the base image ships pip
+# 25.0.1); setuptools CVE-2024-6345 and CVE-2025-47273 (not in the base image, but
+# torch pulls it in).
 FIXED_PIP = (25, 3)
 FIXED_SETUPTOOLS = (78, 1, 1)
 

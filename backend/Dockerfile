@@ -7,9 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /srv
 
-# The pip and setuptools of the base image have known CVEs (pip: CVE-2025-8869;
-# setuptools: CVE-2024-6345, CVE-2025-47273). They are upgraded first, so the fixed
-# pip installs everything else. setuptools is kept: torch declares it a dependency.
+# The base image ships pip 25.0.1, which has CVE-2025-8869; it is upgraded first, so
+# the fixed pip installs everything else. The base image has no setuptools, but torch
+# declares it a dependency and would pull in whatever version it resolves; it is
+# installed here beforehand at a version without CVE-2024-6345 and CVE-2025-47273.
 RUN pip install --upgrade pip==26.3 setuptools==84.2.1
 
 COPY requirements.txt .
