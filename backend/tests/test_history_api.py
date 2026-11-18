@@ -10,8 +10,10 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.exc import DataError, OperationalError, ProgrammingError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+from sqlalchemy.orm import Session
 
-from app.database import Base, Database
+from app.database import Base, Database, create_db_engine
+from app.history import compute_stats
 from app.records import PredictionRecord
 from tests.conftest import MODEL_VERSION
 from tests.helpers import image_bytes, make_record
@@ -407,6 +409,55 @@ def test_stats_count_codes_they_do_not_know(history_client, database):
         "low_confidence": 0,
         "some_future_warning": 1,
     }
+
+
+def test_stats_add_up_while_predictions_are_being_saved(use_database, tmp_path):
+    """A prediction is saved between two statements of /stats. All the numbers in the
+    answer must still describe the same moment: the total is the sum over the classes."""
+    url = f"sqlite:///{(tmp_path / 'history.db').as_posix()}"
+    database, writer = Database.from_url(url), Database.from_url(url)
+    Base.metadata.create_all(database.engine)
+    add_records(database, *records_at("glioma", "notumor", "pituitary", warnings_from=1))
+    statements = []
+
+    @event.listens_for(database.engine, "before_cursor_execute")
+    def save_a_prediction_meanwhile(conn, cursor, statement, *args):
+        statements.append(statement)
+        if len(statements) == 2:
+            add_records(writer, make_record(predicted_class="meningioma", warnings=[]))
+
+    client = use_database(database)
+    try:
+        stats = client.get("/stats").json()
+    finally:
+        database.dispose()
+        writer.dispose()
+
+    assert len(statements) >= 2  # the record really was saved in the middle of /stats
+    assert stats["total"] == sum(stats["by_class"].values())
+    assert stats["with_warnings_share"] == pytest.approx(2 / stats["total"])
+    assert stats["warnings_by_code"]["unexpected_image_size"] == 2
+
+
+def test_stats_read_one_snapshot_on_postgres(monkeypatch):
+    """On Postgres every statement of /stats runs in one REPEATABLE READ transaction, so
+    warnings_by_code, read by a second statement, matches the other numbers."""
+    session = Session(create_db_engine("postgresql+psycopg://u:p@127.0.0.1:1/brain_mri"))
+    requested = []
+
+    class Stop(Exception):
+        """Raised instead of connecting: only the requested isolation level matters."""
+
+    def connection(execution_options=None, **kwargs):
+        requested.append(execution_options)
+        raise Stop
+
+    monkeypatch.setattr(session, "connection", connection)
+
+    with pytest.raises(Stop):
+        compute_stats(session)
+
+    assert requested == [{"isolation_level": "REPEATABLE READ"}]
 
 
 def test_openapi_documents_warnings_by_code(client):
