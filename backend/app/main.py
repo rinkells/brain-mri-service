@@ -14,6 +14,7 @@ from sqlalchemy.exc import DataError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
@@ -46,6 +47,7 @@ from app.schemas import (
     PredictionResponse,
     PredictionWarning,
 )
+from app.security import OriginCheckMiddleware
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -328,11 +330,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    # The middleware added last runs first: the Host is checked, then the Origin,
+    # and only then is the body read.
     app.add_middleware(
         MaxBodySizeMiddleware,
         max_bytes=settings.max_upload_bytes + MULTIPART_OVERHEAD_BYTES,
         detail=file_too_large_detail(settings),
     )
+    app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.allowed_origins)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
     # Only a database that cannot be reached is "unavailable" (503). A value the database
     # rejects is the client's mistake (422). Anything else is a bug and stays a 500.
     app.add_exception_handler(OperationalError, database_unavailable_handler)

@@ -24,6 +24,9 @@ IN_MEMORY_DB = "sqlite+pysqlite:///:memory:"
 MODEL_VERSION = "test-model"
 LOW_CONFIDENCE_THRESHOLD = 0.9
 CONFIDENT_BIAS = 5.0
+# Host header TestClient sends; allowed in tests next to the production defaults.
+TEST_HOST = "testserver"
+PRODUCTION_HOSTS = ["localhost", "127.0.0.1", "api"]
 
 
 @pytest.fixture
@@ -57,6 +60,7 @@ def settings(weights_path):
         max_upload_mb=MAX_UPLOAD_MB,
         max_pixels=MAX_PIXELS,
         low_confidence_threshold=LOW_CONFIDENCE_THRESHOLD,
+        allowed_hosts=[*PRODUCTION_HOSTS, TEST_HOST],
     )
 
 
