@@ -10,7 +10,9 @@ from app.config import DEFAULT_MAX_IMAGE_SIDE
 IMG_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
-ALLOWED_FORMATS = ("JPEG", "PNG")
+# MPO is how phone cameras save JPEG photos: the photo itself is the first frame,
+# followed by previews or a stereo pair. Only that first frame is read.
+ALLOWED_FORMATS = ("JPEG", "MPO", "PNG")
 
 # Modes with more than 8 bits per channel. convert("RGB") clips them to 0..255
 # instead of scaling, so a 16-bit greyscale PNG would turn almost entirely white.
@@ -80,7 +82,7 @@ def build_transform() -> T.Compose:
 def decode_image(
     data: bytes, max_pixels: int, max_side: int = DEFAULT_MAX_IMAGE_SIDE
 ) -> Image.Image:
-    """Decode an uploaded JPEG or PNG into an RGB image, as the training Dataset did.
+    """Decode an uploaded JPEG (or MPO) or PNG into an RGB image, as the training Dataset did.
 
     The format is detected from the file content, not from its name or Content-Type.
     """
@@ -115,7 +117,8 @@ def decode_image(
     if image.mode in HIGH_BIT_DEPTH_MODES:
         raise UnsupportedFormatError(HIGH_BIT_DEPTH_MESSAGE)
     # Otherwise only the first frame of an animated PNG would be classified, silently.
-    if getattr(image, "n_frames", 1) > 1:
+    # An MPO is a JPEG photo whose extra frames are not part of the picture.
+    if image.format != "MPO" and getattr(image, "n_frames", 1) > 1:
         raise UnsupportedFormatError(MULTI_FRAME_MESSAGE)
 
     try:

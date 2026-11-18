@@ -262,6 +262,30 @@ def animated_png(frames: int = 2) -> bytes:
     return buffer.getvalue()
 
 
+def mpo_bytes(width: int = 320, height: int = 240) -> bytes:
+    """A real MPO file, as phone cameras write it: two JPEG frames and an MP index ("MPF").
+    The second frame is plain white, so it is easy to tell which one was read."""
+    first = make_image(width, height, "RGB")
+    second = Image.new("RGB", (width, height), (255, 255, 255))
+    buffer = io.BytesIO()
+    first.save(buffer, format="MPO", save_all=True, append_images=[second])
+    return buffer.getvalue()
+
+
+def test_decode_accepts_mpo_and_reads_its_first_frame():
+    data = mpo_bytes()
+    opened = Image.open(io.BytesIO(data))
+    assert (opened.format, opened.n_frames) == ("MPO", 2)
+    assert b"MPF\x00" in data
+
+    decoded = decode_image(data, MAX_PIXELS)
+
+    first_frame = Image.open(io.BytesIO(data)).convert("RGB")  # as the training loader reads it
+    assert decoded.size == (320, 240)
+    assert np.array_equal(np.asarray(decoded), np.asarray(first_frame))
+    assert np.asarray(decoded).mean() < 200  # not the white second frame
+
+
 def test_decode_rejects_animated_png():
     data = animated_png()
     assert Image.open(io.BytesIO(data)).n_frames == 2

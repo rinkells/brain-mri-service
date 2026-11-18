@@ -130,6 +130,20 @@ def test_gradcam_false_returns_no_heatmap(client):
     assert response.json()["gradcam_png_base64"] is None
 
 
+def test_predict_accepts_mpo_photo_from_a_phone(client):
+    """Phones save JPEG photos as MPO (extra frames after the main one); the first is used."""
+    scan = make_image(512, 512, "RGB")
+    buffer = io.BytesIO()
+    scan.save(buffer, format="MPO", save_all=True, append_images=[scan.rotate(90)])
+    assert Image.open(io.BytesIO(buffer.getvalue())).format == "MPO"
+
+    response = post_image(client, buffer.getvalue(), "photo.jpg", "image/jpeg")
+
+    assert response.status_code == 200
+    assert response.json()["image_size"] == {"width": 512, "height": 512}
+    assert response.json()["warnings"] == []
+
+
 def test_format_is_detected_from_content_not_from_name(client):
     response = post_image(client, image_bytes(512, 512, "PNG"), "notes.txt", "text/plain")
 
