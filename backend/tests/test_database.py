@@ -8,7 +8,9 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import inspect, select, text
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError, StatementError
+from sqlalchemy.schema import CreateTable
 
 from app.database import Database, create_db_engine
 from app.records import PredictionRecord
@@ -269,3 +271,106 @@ def test_offline_sql_targets_postgres(capsys):
         "DEFAULT 'resnet18_v2' NOT NULL" in sql
     )
     assert "ALTER TABLE predictions ALTER COLUMN model_version DROP DEFAULT" in sql
+
+
+# --- warnings must be a JSON array ---------------------------------------------
+
+
+def insert_raw_warnings(url: str, warnings_json: str) -> uuid.UUID:
+    """Insert a record with plain SQL, so warnings can be anything at all."""
+    record_id = uuid.uuid4()
+    engine = create_db_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO predictions (id, created_at, predicted_class, probabilities, "
+                    "image_width, image_height, warnings, image_sha256, gradcam_requested, "
+                    "latency_ms, model_version) VALUES (:id, '2026-11-01 12:00:00.000000', "
+                    "'glioma', '{\"glioma\": 1.0}', 512, 512, :warnings, :sha, 0, 1.5, 'v')"
+                ),
+                {"id": record_id.hex, "warnings": warnings_json, "sha": "0" * 64},
+            )
+    finally:
+        engine.dispose()
+    return record_id
+
+
+def current_revision(url: str) -> str:
+    engine = create_db_engine(url)
+    try:
+        with engine.connect() as connection:
+            return connection.scalar(text("SELECT version_num FROM alembic_version"))
+    finally:
+        engine.dispose()
+
+
+def test_migration_stops_on_warnings_that_are_not_arrays_and_changes_nothing(tmp_path):
+    url = sqlite_url(tmp_path)
+    config = alembic_config(url)
+    command.upgrade(config, "0002")
+    good = insert_raw_warnings(url, "[]")
+    as_object = insert_raw_warnings(url, '{"code": "low_confidence"}')
+    not_json = insert_raw_warnings(url, "not json at all")
+
+    with pytest.raises(RuntimeError) as error:
+        command.upgrade(config, "head")
+
+    report = str(error.value)
+    assert "2 records" in report
+    assert str(as_object) in report and str(not_json) in report
+    assert str(good) not in report
+    assert "Nothing was changed" in report
+    assert current_revision(url) == "0002"
+    engine = create_db_engine(url)
+    with engine.connect() as connection:
+        rows = dict(connection.execute(text("SELECT id, warnings FROM predictions")).all())
+    engine.dispose()
+    assert sorted(rows.values()) == sorted(["[]", '{"code": "low_confidence"}', "not json at all"])
+
+
+def test_migration_passes_when_every_warnings_value_is_an_array(tmp_path):
+    url = sqlite_url(tmp_path)
+    config = alembic_config(url)
+    command.upgrade(config, "0002")
+    insert_raw_warnings(url, "[]")
+    insert_raw_warnings(url, '[{"code": "low_confidence", "message": "Низька впевненість."}]')
+
+    command.upgrade(config, "head")
+
+    assert current_revision(url) == "0003"
+
+
+def test_offline_sql_adds_the_warnings_check_on_postgres(capsys):
+    url = "postgresql+psycopg://user:secret@localhost:5432/brain_mri"
+
+    command.upgrade(alembic_config(url), "0002:0003", sql=True)
+
+    sql = capsys.readouterr().out
+    assert (
+        "ALTER TABLE predictions ADD CONSTRAINT ck_predictions_warnings_is_array "
+        "CHECK (jsonb_typeof(warnings) = 'array')" in sql
+    )
+
+
+def test_offline_downgrade_drops_the_warnings_check_on_postgres(capsys):
+    url = "postgresql+psycopg://user:secret@localhost:5432/brain_mri"
+
+    command.downgrade(alembic_config(url), "0003:0002", sql=True)
+
+    assert (
+        "ALTER TABLE predictions DROP CONSTRAINT ck_predictions_warnings_is_array"
+        in capsys.readouterr().out
+    )
+
+
+def test_model_declares_the_warnings_check_for_postgres_only():
+    table = PredictionRecord.__table__
+
+    postgres_ddl = str(CreateTable(table).compile(dialect=postgresql.dialect()))
+    sqlite_ddl = str(CreateTable(table).compile(dialect=sqlite.dialect()))
+
+    assert "ck_predictions_warnings_is_array CHECK (jsonb_typeof(warnings) = 'array')" in (
+        postgres_ddl
+    )
+    assert "jsonb_typeof" not in sqlite_ddl

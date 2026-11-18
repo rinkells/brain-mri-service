@@ -173,6 +173,67 @@ def test_pagination(history_client, database):
     assert (second["limit"], second["offset"]) == (2, 2)
 
 
+DAMAGED_WARNINGS = {
+    "object": {"code": "low_confidence", "message": "Не список."},
+    "string": "oops",
+    "missing-message": [{"code": "low_confidence"}],
+    "not-an-object": [42, {"code": "unexpected_image_size", "message": "Розмір не 512×512."}],
+}
+
+
+def test_damaged_warnings_do_not_break_the_history(history_client, database, caplog):
+    """A record whose warnings were damaged outside the service is still listed: the
+    malformed warnings are skipped and logged, everything else is returned."""
+    caplog.set_level(logging.WARNING)
+    good = make_record(created_at=BASE_TIME, warnings=[SIZE_WARNING])
+    damaged = {
+        name: make_record(created_at=BASE_TIME + timedelta(minutes=index + 1), warnings=warnings)
+        for index, (name, warnings) in enumerate(DAMAGED_WARNINGS.items())
+    }
+    add_records(database, good, *damaged.values())
+
+    response = history_client.get("/predictions")
+
+    assert response.status_code == 200
+    by_id = {item["id"]: item for item in response.json()["items"]}
+    assert len(by_id) == 5
+    assert by_id[str(good.id)]["warnings"] == [SIZE_WARNING]
+    assert by_id[str(damaged["object"].id)]["warnings"] == []
+    assert by_id[str(damaged["string"].id)]["warnings"] == []
+    assert by_id[str(damaged["missing-message"].id)]["warnings"] == []
+    assert by_id[str(damaged["not-an-object"].id)]["warnings"] == [
+        {"code": "unexpected_image_size", "message": "Розмір не 512×512."}
+    ]
+    for record in damaged.values():
+        assert str(record.id) in caplog.text
+    assert str(good.id) not in caplog.text
+
+
+def test_one_damaged_record_can_be_opened(history_client, database):
+    (record_id,) = add_records(database, make_record(warnings="oops"))
+
+    response = history_client.get(f"/predictions/{record_id}")
+
+    assert response.status_code == 200
+    assert response.json()["warnings"] == []
+    assert response.json()["predicted_class"] == "meningioma"
+
+
+def test_stats_skip_damaged_warnings(history_client, database):
+    add_records(
+        database,
+        make_record(warnings=[SIZE_WARNING]),
+        *(make_record(warnings=warnings) for warnings in DAMAGED_WARNINGS.values()),
+    )
+
+    response = history_client.get("/stats")
+
+    # Only well-formed warnings count, the same ones the history shows.
+    assert response.status_code == 200
+    assert response.json()["total"] == 5
+    assert response.json()["warnings_by_code"] == {"unexpected_image_size": 2, "low_confidence": 0}
+
+
 def test_filter_by_class(history_client, database):
     add_records(database, *records_at("glioma", "pituitary", "glioma", "notumor"))
 

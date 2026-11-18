@@ -105,12 +105,31 @@ class HistoryStats:
     warnings_by_code: dict[str, int]
 
 
+def well_formed_warnings(warnings: object) -> list[dict[str, str]]:
+    """The warnings of a stored record that have a text code and message.
+
+    The service only ever saves such a list, but a record changed by hand or by
+    another tool may hold anything. Whatever is malformed is left out, so one
+    damaged record cannot break the history or the statistics.
+    """
+    if not isinstance(warnings, list):
+        return []
+    return [
+        warning
+        for warning in warnings
+        if isinstance(warning, dict)
+        and isinstance(warning.get("code"), str)
+        and isinstance(warning.get("message"), str)
+    ]
+
+
 def count_warning_codes(session: Session) -> dict[str, int]:
     """Number of predictions with each warning code; known codes are always present.
 
     A prediction with several warnings counts once for each of its codes. The codes
     are counted in Python: unpacking a JSON array in SQL takes different functions on
-    Postgres and SQLite. Only records that have warnings are read.
+    Postgres and SQLite. Only records that have warnings are read, and only their
+    well-formed warnings count, the same ones the history shows.
     """
     counts = dict.fromkeys(WARNING_CODES, 0)
     rows = session.scalars(
@@ -119,7 +138,7 @@ def count_warning_codes(session: Session) -> dict[str, int]:
         .execution_options(yield_per=1000)
     )
     for warnings in rows:
-        for code in {warning["code"] for warning in warnings}:
+        for code in {warning["code"] for warning in well_formed_warnings(warnings)}:
             counts[code] = counts.get(code, 0) + 1
     return counts
 

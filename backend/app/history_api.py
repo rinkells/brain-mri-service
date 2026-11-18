@@ -1,5 +1,6 @@
 """History endpoints: GET/DELETE /predictions and GET /stats."""
 
+import logging
 from collections.abc import Iterator
 from typing import Annotated
 from uuid import UUID
@@ -9,7 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.config import CLASS_NAMES, ClassName
 from app.database import Database
-from app.history import compute_stats, delete_prediction, list_predictions
+from app.history import (
+    compute_stats,
+    delete_prediction,
+    list_predictions,
+    well_formed_warnings,
+)
 from app.records import PredictionRecord
 from app.schemas import (
     ErrorResponse,
@@ -19,6 +25,8 @@ from app.schemas import (
     PredictionWarning,
     StatsResponse,
 )
+
+logger = logging.getLogger("uvicorn.error")
 
 HISTORY_DISABLED = "Історію вимкнено: не задано DATABASE_URL."
 DATABASE_UNAVAILABLE = "База даних недоступна. Спробуйте пізніше."
@@ -47,6 +55,19 @@ SessionDep = Annotated[Session, Depends(get_session)]
 router = APIRouter(tags=["history"], responses=UNAVAILABLE_RESPONSE)
 
 
+def readable_warnings(record: PredictionRecord) -> list[PredictionWarning]:
+    """The record's well-formed warnings; anything else is logged and left out."""
+    warnings = well_formed_warnings(record.warnings)
+    if not isinstance(record.warnings, list) or len(warnings) != len(record.warnings):
+        logger.warning(
+            "Prediction %s has malformed warnings; showing %d of them. Stored value: %.200r",
+            record.id,
+            len(warnings),
+            record.warnings,
+        )
+    return [PredictionWarning(**warning) for warning in warnings]
+
+
 def to_response(record: PredictionRecord) -> PredictionRecordResponse:
     return PredictionRecordResponse(
         id=record.id,
@@ -57,7 +78,7 @@ def to_response(record: PredictionRecord) -> PredictionRecordResponse:
             name: record.probabilities[name] for name in CLASS_NAMES if name in record.probabilities
         },
         image_size=ImageSize(width=record.image_width, height=record.image_height),
-        warnings=[PredictionWarning(**warning) for warning in record.warnings],
+        warnings=readable_warnings(record),
         gradcam_requested=record.gradcam_requested,
         latency_ms=record.latency_ms,
         model_version=record.model_version,

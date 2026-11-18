@@ -59,6 +59,10 @@ class PredictionRecord(Base):
         CheckConstraint(f"predicted_class IN ({_CLASS_LIST})", name="predicted_class"),
         CheckConstraint("image_width > 0 AND image_height > 0", name="image_size"),
         CheckConstraint("latency_ms >= 0", name="latency_ms"),
+        # Postgres only (migration 0003): SQLite, used in tests, has no jsonb_typeof.
+        CheckConstraint("jsonb_typeof(warnings) = 'array'", name="warnings_is_array").ddl_if(
+            dialect="postgresql"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
