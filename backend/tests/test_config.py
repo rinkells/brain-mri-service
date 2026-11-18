@@ -18,6 +18,7 @@ ENV_VARS = (
     "DATABASE_URL",
     "ALLOWED_HOSTS",
     "ALLOWED_ORIGINS",
+    "ENABLE_DOCS",
 )
 
 
@@ -193,3 +194,10 @@ def test_invalid_hosts_and_origins_are_rejected(monkeypatch, name, value):
 
     with pytest.raises(ValidationError):
         load_settings()
+
+
+def test_enable_docs(monkeypatch):
+    assert load_settings().enable_docs is True
+
+    monkeypatch.setenv("ENABLE_DOCS", "false")
+    assert load_settings().enable_docs is False

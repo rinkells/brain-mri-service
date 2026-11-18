@@ -47,7 +47,7 @@ def comma_separated(value: object) -> object:
 class Settings(BaseSettings):
     """Settings taken from MODEL_PATH, MODEL_VERSION, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS,
     MAX_IMAGE_SIDE, MAX_CONCURRENT_INFERENCES, MAX_QUEUE, LOW_CONFIDENCE_THRESHOLD,
-    DATABASE_URL, ALLOWED_HOSTS and ALLOWED_ORIGINS."""
+    DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS and ENABLE_DOCS."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -84,6 +84,8 @@ class Settings(BaseSettings):
     allowed_origins: Annotated[list[str], NoDecode] = Field(
         default=list(DEFAULT_ALLOWED_ORIGINS)
     )
+    # Serve Swagger UI (/docs), ReDoc (/redoc) and the schema (/openapi.json).
+    enable_docs: bool = True
 
     @field_validator("allowed_hosts", "allowed_origins", mode="before")
     @classmethod

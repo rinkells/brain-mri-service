@@ -10,8 +10,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.main import create_app
 from tests.helpers import image_bytes, make_record
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -147,3 +149,96 @@ def test_swagger_ui_on_the_api_port(client):
     response = post_scan(client, Host="127.0.0.1:8000", Origin="http://127.0.0.1:8000")
 
     assert response.status_code == 200
+
+
+# --- Security headers ----------------------------------------------------------
+
+SECURITY_HEADERS = {
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "x-frame-options": "DENY",
+}
+
+
+def assert_security_headers(response):
+    for name, value in SECURITY_HEADERS.items():
+        assert response.headers.get(name) == value, name
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "headers", "status"),
+    [
+        ("get", "/health", {}, 200),
+        ("get", "/docs", {}, 200),
+        ("get", "/openapi.json", {}, 200),
+        ("get", "/no-such-page", {}, 404),
+        ("get", "/health", {"Host": "evil.example"}, 400),
+        (
+            "delete",
+            "/predictions/00000000-0000-4000-8000-000000000000",
+            {"Origin": FOREIGN_ORIGIN},
+            403,
+        ),
+        ("get", "/predictions", {}, 503),  # history disabled in this app
+    ],
+    ids=["health", "docs", "openapi", "404", "foreign-host", "foreign-origin", "503"],
+)
+def test_every_response_has_security_headers(client, method, path, headers, status):
+    response = getattr(client, method)(path, headers=headers)
+
+    assert response.status_code == status
+    assert_security_headers(response)
+
+
+def test_prediction_has_security_headers(client):
+    response = post_scan(client)
+
+    assert response.status_code == 200
+    assert_security_headers(response)
+
+
+def test_history_is_never_cached(history_client, database):
+    record_id = add_record(database)
+
+    for path in ("/predictions", f"/predictions/{record_id}", "/stats"):
+        response = history_client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers.get("cache-control") == "no-store", path
+    deleted = history_client.delete(f"/predictions/{record_id}")
+    assert deleted.headers.get("cache-control") == "no-store"
+    missing = history_client.get(f"/predictions/{record_id}")
+    assert missing.status_code == 404
+    assert missing.headers.get("cache-control") == "no-store"
+
+
+def test_no_store_is_only_for_the_history(client):
+    """/predict shares a prefix with /predictions, but is not part of the history."""
+    assert client.get("/health").headers.get("cache-control") is None
+    assert post_scan(client).headers.get("cache-control") is None
+
+
+# --- ENABLE_DOCS ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_docs_are_on_by_default(client, path):
+    assert client.get(path).status_code == 200
+
+
+@pytest.fixture(scope="module")
+def client_without_docs(settings):
+    with TestClient(create_app(settings.model_copy(update={"enable_docs": False}))) as client:
+        yield client
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"])
+def test_docs_can_be_switched_off(client_without_docs, path):
+    response = client_without_docs.get(path)
+
+    assert response.status_code == 404
+    assert_security_headers(response)
+
+
+def test_api_works_without_docs(client_without_docs):
+    assert client_without_docs.get("/health").status_code == 200
+    assert post_scan(client_without_docs).status_code == 200

@@ -255,6 +255,7 @@ npm run dev
 | `MAX_QUEUE` | `20` | Скільки запитів `/predict` може чекати на вільне місце, поки виконуються `MAX_CONCURRENT_INFERENCES` прогнозів. Наступні отримують 503 із заголовком `Retry-After` |
 | `LOW_CONFIDENCE_THRESHOLD` | `0.9` | Поріг від 0 до 1: якщо ймовірність передбаченого класу нижча, прогноз отримує попередження `low_confidence`. Порівнюється неокруглене значення |
 | `DATABASE_URL` | не задано | Адреса бази історії у форматі SQLAlchemy, наприклад `postgresql+psycopg://user:password@host:5432/db`. Без неї історію вимкнено |
+| `ENABLE_DOCS` | `true` | Чи віддавати Swagger UI (`/docs`), ReDoc (`/redoc`) і схему `/openapi.json`. `false` прибирає всі три (404) |
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1,api` | Значення заголовка `Host` (без порту), на які відповідає API, через кому. На інші — 400. `*` дозволяє будь-який хост. `api` — назва сервісу в Docker Compose |
 | `ALLOWED_ORIGINS` | `http://localhost:5173`, `http://127.0.0.1:5173`, `http://localhost:4173`, `http://127.0.0.1:4173`, `http://localhost:8000`, `http://127.0.0.1:8000` | Сторінки (`схема://хост[:порт]`, через кому), з яких браузер може надсилати `POST` і `DELETE`: Vite (`npm run dev`, 5173), `npm run preview` (4173) і Swagger UI самого API (8000). Запит із іншим заголовком `Origin` отримує 403; запити без `Origin` (curl, скрипти) не перевіряються. Порожнє значення забороняє запис із будь-якої сторінки |
 
@@ -272,7 +273,7 @@ Compose читає кореневий файл `.env` (шаблон — `.env.ex
 | `POSTGRES_DB` | `brain_mri` | Назва бази |
 | `POSTGRES_PORT` | `5433` | Порт Postgres на `127.0.0.1` (5433, щоб не конфліктувати з локальним Postgres на 5432) |
 | `API_PORT` | `8000` | Порт API на `127.0.0.1` |
-| `DEVICE`, `MAX_UPLOAD_MB`, `MAX_PIXELS`, `MAX_IMAGE_SIDE`, `MAX_CONCURRENT_INFERENCES`, `MAX_QUEUE`, `LOW_CONFIDENCE_THRESHOLD`, `ALLOWED_HOSTS` | як у бекенді | Передаються бекенду |
+| `DEVICE`, `MAX_UPLOAD_MB`, `MAX_PIXELS`, `MAX_IMAGE_SIDE`, `MAX_CONCURRENT_INFERENCES`, `MAX_QUEUE`, `LOW_CONFIDENCE_THRESHOLD`, `ALLOWED_HOSTS`, `ENABLE_DOCS` | як у бекенді | Передаються бекенду |
 | `ALLOWED_ORIGINS` | як у бекенді, але порт API береться з `API_PORT` | Передається бекенду; якщо змінили `API_PORT`, Swagger UI однаково працює |
 
 `MODEL_PATH` і `MODEL_VERSION` для сервісу `api` задано в `docker-compose.yml`.
@@ -569,6 +570,11 @@ curl.exe "http://127.0.0.1:8000/predictions?limit=10&offset=0&predicted_class=gl
 для FastAPI список помилок валідації; лише коли значення відхилила сама база, `detail` —
 рядок.
 
+Кожна відповідь, зокрема з помилкою, має заголовки `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer` і `X-Frame-Options: DENY`. Відповіді історії (`/predictions`,
+`/predictions/{id}`, `/stats`) мають ще `Cache-Control: no-store`, щоб результати прогнозів
+не лишалися в кеші браузера чи проксі.
+
 Формат файлу визначається за його вмістом, а не за розширенням чи заголовком
 `Content-Type`. Фото з камер телефонів у форматі MPO (JPEG, після якого йдуть додаткові кадри:
 прев'ю чи стереопара) приймаються як JPEG; аналізується перший кадр, тобто саме фото.
@@ -657,6 +663,7 @@ Grad-CAM показує, на що зважала модель, а не межі
   `127.0.0.1`, і сервіс не варто відкривати в публічну мережу. API відповідає лише на
   хости з `ALLOWED_HOSTS` (захист від DNS rebinding) і відхиляє `POST`/`DELETE` зі сторінок
   інших сайтів (`ALLOWED_ORIGINS`), але від програм, що не є браузером (curl, скрипти),
-  ці перевірки не захищають: вони не надсилають `Origin`.
+  ці перевірки не захищають: вони не надсилають `Origin`. Документацію API (`/docs`,
+  `/redoc`, `/openapi.json`) можна вимкнути через `ENABLE_DOCS=false`.
 - **Продакшн-збірка вебінтерфейсу** (nginx або віддача `dist` з FastAPI) ще не зроблена.
 - **Призначення.** Це навчальний проєкт, а не медичний виріб.

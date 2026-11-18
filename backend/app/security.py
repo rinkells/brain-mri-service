@@ -1,10 +1,50 @@
-"""Protection against requests that web pages on other sites make on the user's behalf."""
+"""Protection against web pages on other sites: the Origin check and security headers."""
 
 from collections.abc import Iterable
 
 from fastapi.responses import JSONResponse
-from starlette.datastructures import Headers
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+# Sent with every response, errors included.
+SECURITY_HEADERS = {
+    # Never guess a content type: JSON stays JSON, even if it holds markup.
+    "X-Content-Type-Options": "nosniff",
+    # Do not tell other sites which page of the service a link was followed from.
+    "Referrer-Policy": "no-referrer",
+    # No page may show the API or Swagger UI in a frame (clickjacking).
+    "X-Frame-Options": "DENY",
+}
+# History responses hold prediction results; neither the browser nor a proxy keeps them.
+NO_STORE = {"Cache-Control": "no-store"}
+
+
+def is_history_path(path: str) -> bool:
+    """/predictions, /predictions/{id} and /stats, but not /predict."""
+    return path in ("/predictions", "/stats") or path.startswith("/predictions/")
+
+
+class SecurityHeadersMiddleware:
+    """Add SECURITY_HEADERS to every response and Cache-Control: no-store to the history."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        added = SECURITY_HEADERS | (NO_STORE if is_history_path(scope["path"]) else {})
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in added.items():
+                    headers[name] = value
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 FORBIDDEN_ORIGIN_DETAIL = (
     "Запити з цього джерела (Origin) заборонено. Дозволені джерела задає ALLOWED_ORIGINS."
