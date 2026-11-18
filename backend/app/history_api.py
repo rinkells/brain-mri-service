@@ -58,7 +58,6 @@ def to_response(record: PredictionRecord) -> PredictionRecordResponse:
         },
         image_size=ImageSize(width=record.image_width, height=record.image_height),
         warnings=[PredictionWarning(**warning) for warning in record.warnings],
-        image_sha256=record.image_sha256,
         gradcam_requested=record.gradcam_requested,
         latency_ms=record.latency_ms,
         model_version=record.model_version,

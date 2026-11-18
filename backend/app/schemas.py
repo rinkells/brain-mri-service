@@ -47,7 +47,8 @@ class PredictionResponse(BaseModel):
 
 
 class PredictionRecordResponse(BaseModel):
-    """A saved prediction. The scan itself and its file name are never stored."""
+    """A saved prediction. The scan itself and its file name are never stored, and the
+    SHA-256 of the file, which is stored, is never returned: it identifies the scan."""
 
     id: UUID
     created_at: datetime = Field(description="Час прогнозу в UTC")
@@ -55,7 +56,6 @@ class PredictionRecordResponse(BaseModel):
     probabilities: dict[ClassName, float]
     image_size: ImageSize
     warnings: list[PredictionWarning]
-    image_sha256: str = Field(description="SHA-256 завантаженого файлу (hex)")
     gradcam_requested: bool = Field(description="Чи запитували теплову карту")
     latency_ms: float = Field(description="Час обробки запиту без збереження в історію, мс")
     model_version: str = Field(

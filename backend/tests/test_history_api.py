@@ -54,6 +54,27 @@ def records_at(*classes, warnings_from=None):
 # --- Saving after POST /predict -----------------------------------------------
 
 
+def test_file_hash_is_stored_but_never_returned(history_client):
+    """The SHA-256 of a scan identifies the file: it stays in the database only."""
+    data = image_bytes(640, 480)
+    digest = hashlib.sha256(data).hexdigest()
+
+    created = post_scan(history_client, data)
+    listed = history_client.get("/predictions")
+    single = history_client.get(f"/predictions/{created.json()['id']}")
+
+    for response in (created, listed, single):
+        assert response.status_code == 200
+        assert digest not in response.text
+        assert "image_sha256" not in response.text
+    assert "image_sha256" not in listed.json()["items"][0]
+    assert "image_sha256" not in single.json()
+
+
+def test_openapi_does_not_mention_the_file_hash(client):
+    assert "image_sha256" not in client.get("/openapi.json").text
+
+
 def test_successful_prediction_is_saved(history_client, database):
     data = image_bytes(640, 480)
 
@@ -128,7 +149,6 @@ def test_list_is_newest_first_with_full_records(history_client, database):
         "probabilities",
         "image_size",
         "warnings",
-        "image_sha256",
         "gradcam_requested",
         "latency_ms",
         "model_version",

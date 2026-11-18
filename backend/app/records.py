@@ -2,7 +2,8 @@
 
 Only the outcome of a prediction is stored. The scan itself and the file name
 are never saved: they are medical data. The SHA-256 of the file is kept so
-repeated uploads of the same scan can be recognised.
+repeated uploads of the same scan can be recognised in the database; the API
+never returns it, because it identifies the scan.
 """
 
 import uuid

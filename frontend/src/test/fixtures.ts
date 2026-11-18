@@ -44,7 +44,6 @@ export function makeRecord(n: number, overrides: Partial<PredictionRecord> = {})
     probabilities: { glioma: 0.1, meningioma: 0.1, notumor: 0.1, pituitary: 0.1, [predicted]: 0.7 },
     image_size: { width: 512, height: 512 },
     warnings: [],
-    image_sha256: 'a'.repeat(64),
     gradcam_requested: false,
     latency_ms: 100,
     model_version: 'resnet18_v2c',
