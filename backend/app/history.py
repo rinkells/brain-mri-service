@@ -5,7 +5,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import Integer, func, select
+from sqlalchemy import Integer, delete, func, select
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.functions import FunctionElement
@@ -84,12 +84,16 @@ def list_predictions(
 
 
 def delete_prediction(session: Session, prediction_id: uuid.UUID) -> bool:
-    record = session.get(PredictionRecord, prediction_id)
-    if record is None:
-        return False
-    session.delete(record)
+    """Delete a record; return False if there was none.
+
+    The answer comes from the rows the DELETE itself removed. Reading the record
+    first would let two simultaneous requests both see it and both report success.
+    """
+    result = session.execute(
+        delete(PredictionRecord).where(PredictionRecord.id == prediction_id)
+    )
     session.commit()
-    return True
+    return result.rowcount > 0
 
 
 @dataclass(frozen=True)

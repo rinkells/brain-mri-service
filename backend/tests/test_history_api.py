@@ -1,12 +1,15 @@
 import hashlib
 import logging
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import event
 
-from app.database import Database
+from app.database import Base, Database
 from app.records import PredictionRecord
 from tests.conftest import MODEL_VERSION
 from tests.helpers import image_bytes, make_record
@@ -222,6 +225,35 @@ def test_delete_twice_is_404(history_client, database):
 
     assert history_client.delete(f"/predictions/{record_id}").status_code == 204
     assert history_client.delete(f"/predictions/{record_id}").status_code == 404
+
+
+def test_parallel_deletes_of_one_record_succeed_only_once(use_database, tmp_path):
+    """Two DELETE requests for the same id reach the database at the same moment.
+
+    A file database gives each request its own connection. Both requests are held just
+    before their DELETE statement until the other one gets there too, so both have done
+    whatever they do before deleting (e.g. read the record) when the first delete runs.
+    """
+    database = Database.from_url(f"sqlite:///{(tmp_path / 'history.db').as_posix()}")
+    Base.metadata.create_all(database.engine)
+    (record_id,) = add_records(database, make_record())
+    both_ready = threading.Barrier(2, timeout=5)
+
+    @event.listens_for(database.engine, "before_cursor_execute")
+    def wait_for_the_other_delete(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("DELETE"):
+            both_ready.wait()
+
+    client = use_database(database)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(
+                pool.map(lambda _: client.delete(f"/predictions/{record_id}"), range(2))
+            )
+    finally:
+        database.dispose()
+
+    assert sorted(response.status_code for response in responses) == [204, 404]
 
 
 # --- GET /stats ----------------------------------------------------------------
