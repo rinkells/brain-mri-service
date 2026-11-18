@@ -2,6 +2,7 @@ import base64
 import io
 import time
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -10,7 +11,7 @@ from app.config import CLASS_NAMES, Settings
 from app.main import create_app
 from app.model import ModelLoadError, Prediction
 from tests.conftest import MAX_UPLOAD_MB, MODEL_VERSION
-from tests.helpers import encode_image, image_bytes
+from tests.helpers import encode_image, image_bytes, make_image
 
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 BOUNDARY = "test-boundary"
@@ -235,6 +236,46 @@ def test_predict_rejects_other_formats_with_415(client, fmt):
 
     assert response.status_code == 415
     assert fmt in response.json()["detail"]
+
+
+def test_predict_rejects_16_bit_png_with_415(client):
+    values = np.linspace(0, 65535, 512 * 512).astype(np.uint16).reshape(512, 512)
+
+    response = post_image(client, encode_image(Image.fromarray(values)))
+
+    assert response.status_code == 415
+    assert response.json()["detail"] == (
+        "16-бітні зображення не підтримуються: експортуйте як 8-бітний PNG або JPEG."
+    )
+
+
+def test_predict_rejects_animated_png_with_415(client):
+    scan = make_image(512, 512)
+    buffer = io.BytesIO()
+    scan.save(buffer, format="PNG", save_all=True, append_images=[scan.rotate(90)])
+
+    response = post_image(client, buffer.getvalue())
+
+    assert response.status_code == 415
+    assert "кількома кадрами" in response.json()["detail"]
+
+
+def test_hidden_pixels_do_not_change_the_prediction(client):
+    """Pixels under alpha 0 are classified as the black they look like, not as what they hold."""
+    scan = np.asarray(make_image(512, 512, "RGB"))
+    noise = np.random.default_rng(0).integers(0, 256, (512, 256, 3), dtype=np.uint8)
+    alpha = np.full((512, 512), 255, dtype=np.uint8)
+    alpha[:, 256:] = 0
+    hidden = np.concatenate([scan[:, :256], noise], axis=1)
+    on_black = np.concatenate([scan[:, :256], np.zeros_like(noise)], axis=1)
+
+    transparent = post_image(client, encode_image(Image.fromarray(np.dstack([hidden, alpha]))))
+    black = post_image(client, encode_image(Image.fromarray(on_black)))
+
+    assert transparent.status_code == black.status_code == 200
+    assert transparent.json()["probabilities"] == pytest.approx(
+        black.json()["probabilities"], abs=1e-6
+    )
 
 
 # --- 413: too large ------------------------------------------------------------

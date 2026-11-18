@@ -376,7 +376,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Зображення не у форматі JPEG чи PNG */
+            /** @description Зображення не у форматі JPEG чи PNG, 16-бітне або має кілька кадрів */
             415: {
                 headers: {
                     [name: string]: unknown;

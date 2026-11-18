@@ -99,7 +99,10 @@ router = APIRouter()
 ERROR_RESPONSES = {
     400: {"model": ErrorResponse, "description": "Файл не є зображенням або пошкоджений"},
     413: {"model": ErrorResponse, "description": "Файл або зображення завелике"},
-    415: {"model": ErrorResponse, "description": "Зображення не у форматі JPEG чи PNG"},
+    415: {
+        "model": ErrorResponse,
+        "description": "Зображення не у форматі JPEG чи PNG, 16-бітне або має кілька кадрів",
+    },
 }
 
 
