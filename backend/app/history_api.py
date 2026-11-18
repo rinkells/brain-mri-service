@@ -22,7 +22,11 @@ from app.schemas import (
 
 HISTORY_DISABLED = "Історію вимкнено: не задано DATABASE_URL."
 DATABASE_UNAVAILABLE = "База даних недоступна. Спробуйте пізніше."
+DATABASE_REJECTED_VALUE = "База даних не прийняла значення із запиту. Перевірте параметри."
 NOT_FOUND = "Прогноз не знайдено."
+
+# Far beyond any real history, and well inside the BIGINT range Postgres takes for OFFSET.
+MAX_OFFSET = 1_000_000
 
 UNAVAILABLE_RESPONSE = {
     503: {"model": ErrorResponse, "description": "Історію вимкнено або база даних недоступна"}
@@ -65,7 +69,9 @@ def to_response(record: PredictionRecord) -> PredictionRecordResponse:
 def list_history(
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=100, description="Скільки записів повернути")] = 20,
-    offset: Annotated[int, Query(ge=0, description="Скільки записів пропустити")] = 0,
+    offset: Annotated[
+        int, Query(ge=0, le=MAX_OFFSET, description="Скільки записів пропустити")
+    ] = 0,
     predicted_class: Annotated[
         ClassName | None, Query(description="Лише прогнози цього класу")
     ] = None,

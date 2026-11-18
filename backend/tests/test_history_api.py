@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import event
+from sqlalchemy.exc import DataError, OperationalError, ProgrammingError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app.database import Base, Database
 from app.records import PredictionRecord
@@ -181,6 +183,66 @@ def test_filter_combines_with_pagination(history_client, database):
 )
 def test_invalid_list_parameters_are_422(history_client, params):
     assert history_client.get("/predictions", params=params).status_code == 422
+
+
+@pytest.mark.parametrize("offset", [1_000_001, 9223372036854775808, 10**30])
+def test_offset_beyond_the_limit_is_422(history_client, offset):
+    """9223372036854775808 is one more than the largest BIGINT Postgres takes for OFFSET."""
+    response = history_client.get("/predictions", params={"offset": offset})
+
+    assert response.status_code == 422
+
+
+def test_largest_allowed_offset(history_client):
+    response = history_client.get("/predictions", params={"offset": 1_000_000})
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+
+
+def failing_query(error: Exception):
+    def query(*args, **kwargs):
+        raise error
+
+    return query
+
+
+def test_value_the_database_rejects_is_422_not_503(history_client, monkeypatch):
+    error = DataError("SELECT ...", {}, Exception("bigint out of range"))
+    monkeypatch.setattr("app.history_api.list_predictions", failing_query(error))
+
+    response = history_client.get("/predictions")
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "База даних не прийняла значення із запиту. Перевірте параметри."
+    }
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OperationalError("SELECT 1", {}, Exception("connection refused")),
+        SQLAlchemyTimeoutError("QueuePool limit of size 5 overflow 10 reached"),
+    ],
+    ids=["connection-lost", "no-free-connection"],
+)
+def test_connection_problems_stay_503(history_client, monkeypatch, error):
+    monkeypatch.setattr("app.history_api.list_predictions", failing_query(error))
+
+    response = history_client.get("/predictions")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "База даних недоступна. Спробуйте пізніше."}
+
+
+def test_other_database_errors_are_not_reported_as_unavailable(history_client, monkeypatch):
+    """A bug in a query must surface as a server error, not hide behind 'try again later'."""
+    error = ProgrammingError("SELECT nonsense", {}, Exception("syntax error"))
+    monkeypatch.setattr("app.history_api.list_predictions", failing_query(error))
+
+    with pytest.raises(ProgrammingError):
+        history_client.get("/predictions")
 
 
 # --- GET and DELETE /predictions/{id} ------------------------------------------

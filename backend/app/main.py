@@ -10,7 +10,8 @@ from typing import Annotated
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy import make_url
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DataError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -27,7 +28,7 @@ from app.config import (
 from app.database import Database
 from app.gradcam import encode_png_base64, overlay_heatmap
 from app.history import save_prediction
-from app.history_api import DATABASE_UNAVAILABLE
+from app.history_api import DATABASE_REJECTED_VALUE, DATABASE_UNAVAILABLE
 from app.history_api import router as history_router
 from app.limiter import InferenceLimiter, ServiceBusyError
 from app.model import BrainMRIClassifier, Prediction
@@ -274,9 +275,18 @@ def analyse(
     )
 
 
-async def database_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.error("History database error on %s %s: %s", request.method, request.url.path, exc)
+async def database_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        "History database unavailable on %s %s: %s", request.method, request.url.path, exc
+    )
     return JSONResponse({"detail": DATABASE_UNAVAILABLE}, status_code=503)
+
+
+async def database_data_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.warning(
+        "History database rejected a value on %s %s: %s", request.method, request.url.path, exc
+    )
+    return JSONResponse({"detail": DATABASE_REJECTED_VALUE}, status_code=422)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -323,7 +333,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_bytes=settings.max_upload_bytes + MULTIPART_OVERHEAD_BYTES,
         detail=file_too_large_detail(settings),
     )
-    app.add_exception_handler(SQLAlchemyError, database_error_handler)
+    # Only a database that cannot be reached is "unavailable" (503). A value the database
+    # rejects is the client's mistake (422). Anything else is a bug and stays a 500.
+    app.add_exception_handler(OperationalError, database_unavailable_handler)
+    app.add_exception_handler(PoolTimeoutError, database_unavailable_handler)
+    app.add_exception_handler(DataError, database_data_error_handler)
     app.include_router(router)
     app.include_router(history_router)
     return app
