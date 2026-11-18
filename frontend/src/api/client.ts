@@ -13,7 +13,7 @@ const KIND_BY_STATUS: Partial<Record<number, ApiErrorKind>> = {
   413: 'too-large',
   415: 'unsupported-format',
   422: 'validation',
-  // Our backend answers 503 only for the history database.
+  // Outside /predict, our backend answers 503 only for the history database.
   503: 'database-unavailable',
   // The Vite dev proxy answers 502 when the backend is not running.
   502: 'unavailable',
@@ -32,7 +32,17 @@ async function readDetail(response: Response): Promise<string | undefined> {
   return undefined
 }
 
-async function send(url: string, init: RequestInit = {}): Promise<Response> {
+/** /predict answers 503 when too many scans are already being analysed. */
+const PREDICT_KIND_BY_STATUS: Partial<Record<number, ApiErrorKind>> = {
+  ...KIND_BY_STATUS,
+  503: 'busy',
+}
+
+async function send(
+  url: string,
+  init: RequestInit = {},
+  kindByStatus = KIND_BY_STATUS,
+): Promise<Response> {
   let response: Response
   try {
     response = await fetch(url, init)
@@ -44,7 +54,7 @@ async function send(url: string, init: RequestInit = {}): Promise<Response> {
   }
 
   if (!response.ok) {
-    throw new ApiError(KIND_BY_STATUS[response.status] ?? 'server', {
+    throw new ApiError(kindByStatus[response.status] ?? 'server', {
       status: response.status,
       detail: await readDetail(response),
     })
@@ -52,8 +62,12 @@ async function send(url: string, init: RequestInit = {}): Promise<Response> {
   return response
 }
 
-async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const response = await send(url, init)
+async function requestJson<T>(
+  url: string,
+  init: RequestInit = {},
+  kindByStatus = KIND_BY_STATUS,
+): Promise<T> {
+  const response = await send(url, init, kindByStatus)
   return (await response.json()) as T
 }
 
@@ -68,7 +82,11 @@ export function predict(
   const body = new FormData()
   body.append('file', file)
   const url = options.gradcam ? '/predict?gradcam=true' : '/predict'
-  return requestJson<PredictionResponse>(url, { method: 'POST', body, signal: options.signal })
+  return requestJson<PredictionResponse>(
+    url,
+    { method: 'POST', body, signal: options.signal },
+    PREDICT_KIND_BY_STATUS,
+  )
 }
 
 export interface HistoryQuery {

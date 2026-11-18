@@ -30,7 +30,8 @@ DEFAULT_MAX_IMAGE_SIDE = 4096
 
 class Settings(BaseSettings):
     """Settings taken from MODEL_PATH, MODEL_VERSION, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS,
-    MAX_IMAGE_SIDE, LOW_CONFIDENCE_THRESHOLD and DATABASE_URL."""
+    MAX_IMAGE_SIDE, MAX_CONCURRENT_INFERENCES, MAX_QUEUE, LOW_CONFIDENCE_THRESHOLD and
+    DATABASE_URL."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -48,6 +49,10 @@ class Settings(BaseSettings):
     max_pixels: int = Field(default=16_777_216, gt=0)  # 4096 x 4096
     # Longest allowed side of a scan, in pixels.
     max_image_side: int = Field(default=DEFAULT_MAX_IMAGE_SIDE, gt=0)
+    # Predictions that run at the same time; up to MAX_QUEUE more wait for a free slot,
+    # and /predict answers 503 to the rest.
+    max_concurrent_inferences: int = Field(default=2, gt=0)
+    max_queue: int = Field(default=20, ge=0)
     # A prediction whose top-1 probability is below this gets a low_confidence warning.
     low_confidence_threshold: float = Field(default=0.9, ge=0, le=1)
     # SQLAlchemy URL of the prediction history, e.g.
