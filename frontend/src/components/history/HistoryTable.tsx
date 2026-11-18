@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { PredictionRecord } from '../../api/types'
 import { CLASS_LABELS } from '../../lib/classes'
 import { formatDateTime, formatPercent } from '../../lib/format'
+import { WarningMarks } from './WarningMarks'
 
 interface HistoryTableProps {
   items: PredictionRecord[]
@@ -74,22 +75,18 @@ export function HistoryTable({ items, loading, emptyText, onDelete }: HistoryTab
                   <td className={`${cell} tabular-nums`}>
                     <time dateTime={item.created_at}>{time}</time>
                   </td>
-                  <td className={`${cell} font-medium`}>{CLASS_LABELS[item.predicted_class]}</td>
+                  <td className={cell}>
+                    <span className="font-medium">{CLASS_LABELS[item.predicted_class]}</span>
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">
+                      модель {item.model_version}
+                    </span>
+                  </td>
                   <td className={`${cell} tabular-nums`}>{formatPercent(confidence)}</td>
                   <td className={`${cell} tabular-nums`}>
                     {item.image_size.width}×{item.image_size.height}
                   </td>
                   <td className={cell}>
-                    {item.warnings.length > 0 ? (
-                      <span
-                        title={item.warnings.map((warning) => warning.message).join('\n')}
-                        className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/50 dark:text-amber-100"
-                      >
-                        Так
-                      </span>
-                    ) : (
-                      <span className="text-slate-500 dark:text-slate-400">Ні</span>
-                    )}
+                    <WarningMarks warnings={item.warnings} />
                   </td>
                   <td className={`${cell} text-right whitespace-nowrap`}>
                     {confirmingId === item.id ? (

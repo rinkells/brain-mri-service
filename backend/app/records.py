@@ -70,3 +70,6 @@ class PredictionRecord(Base):
     image_sha256: Mapped[str] = mapped_column(String(64), index=True)
     gradcam_requested: Mapped[bool]
     latency_ms: Mapped[float]
+    # MODEL_VERSION of the weights that made the prediction. There is no default:
+    # every new record must name its model (older records were filled in by migration 0002).
+    model_version: Mapped[str] = mapped_column(String(64))

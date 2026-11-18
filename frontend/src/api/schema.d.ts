@@ -129,6 +129,11 @@ export interface components {
              * @description Класи в порядку виходів моделі
              */
             classes: ("glioma" | "meningioma" | "notumor" | "pituitary")[];
+            /**
+             * Model Version
+             * @description Версія моделі (MODEL_VERSION)
+             */
+            model_version: string;
         };
         /** ImageSize */
         ImageSize: {
@@ -197,6 +202,11 @@ export interface components {
              * @description Час обробки запиту без збереження в історію, мс
              */
             latency_ms: number;
+            /**
+             * Model Version
+             * @description Версія моделі, що зробила прогноз; resnet18_v2 для записів, збережених до появи цього поля
+             */
+            model_version: string;
         };
         /** PredictionResponse */
         PredictionResponse: {
@@ -230,6 +240,11 @@ export interface components {
              * @description Теплова карта Grad-CAM поверх знімка (PNG у base64); лише з ?gradcam=true
              */
             gradcam_png_base64?: string | null;
+            /**
+             * Model Version
+             * @description Версія моделі, що зробила прогноз
+             */
+            model_version: string;
         };
         /** PredictionWarning */
         PredictionWarning: {
@@ -268,6 +283,13 @@ export interface components {
              * @description Середній час обробки, мс; null, якщо прогнозів немає
              */
             average_latency_ms: number | null;
+            /**
+             * Warnings By Code
+             * @description Кількість прогнозів із кожним кодом попередження. Прогноз із кількома попередженнями враховується в кожному з них; відомі коди є завжди, навіть з 0
+             */
+            warnings_by_code: {
+                [key: string]: number;
+            };
         };
         /** ValidationError */
         ValidationError: {

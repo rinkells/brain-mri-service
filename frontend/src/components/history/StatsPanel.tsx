@@ -1,6 +1,17 @@
 import type { StatsResponse } from '../../api/types'
 import { CLASS_LABELS, CLASS_ORDER } from '../../lib/classes'
 import { formatMilliseconds, formatPercent } from '../../lib/format'
+import { LOW_CONFIDENCE, UNEXPECTED_IMAGE_SIZE } from '../../lib/warnings'
+
+const WARNING_ROWS = [
+  { code: LOW_CONFIDENCE, label: 'Низька впевненість' },
+  { code: UNEXPECTED_IMAGE_SIZE, label: 'Нетиповий розмір знімка' },
+]
+
+/** "12,5 % (1)": share of all predictions and their number; a dash while there are none. */
+function shareOfTotal(count: number, total: number): string {
+  return total ? `${formatPercent(count / total)} (${count})` : '—'
+}
 
 interface StatsPanelProps {
   stats?: StatsResponse
@@ -16,7 +27,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   )
 }
 
-/** Summary from GET /stats: totals, share with warnings, latency and classes. */
+/** Summary from GET /stats: totals, warnings (any and by type), latency and classes. */
 export function StatsPanel({ stats, error }: StatsPanelProps) {
   return (
     <section
@@ -33,23 +44,41 @@ export function StatsPanel({ stats, error }: StatsPanelProps) {
         </p>
       ) : (
         <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-          <dl className="grid gap-3 self-start sm:grid-cols-3">
-            <StatCard label="Усього прогнозів" value={String(stats.total)} />
-            <StatCard
-              label="З попередженнями"
-              value={
-                stats.with_warnings_share == null ? '—' : formatPercent(stats.with_warnings_share)
-              }
-            />
-            <StatCard
-              label="Середній час обробки"
-              value={
-                stats.average_latency_ms == null
-                  ? '—'
-                  : formatMilliseconds(stats.average_latency_ms)
-              }
-            />
-          </dl>
+          <div className="space-y-4 self-start">
+            <dl className="grid gap-3 sm:grid-cols-3">
+              <StatCard label="Усього прогнозів" value={String(stats.total)} />
+              <StatCard
+                label="З будь-яким попередженням"
+                value={
+                  stats.with_warnings_share == null ? '—' : formatPercent(stats.with_warnings_share)
+                }
+              />
+              <StatCard
+                label="Середній час обробки"
+                value={
+                  stats.average_latency_ms == null
+                    ? '—'
+                    : formatMilliseconds(stats.average_latency_ms)
+                }
+              />
+            </dl>
+
+            <div>
+              <h3 className="mb-2 text-sm text-slate-600 dark:text-slate-300">
+                Попередження за типами
+              </h3>
+              <dl className="space-y-1 text-sm">
+                {WARNING_ROWS.map(({ code, label }) => (
+                  <div key={code} className="flex justify-between gap-3">
+                    <dt>{label}</dt>
+                    <dd className="tabular-nums text-slate-600 dark:text-slate-300">
+                      {shareOfTotal(stats.warnings_by_code[code] ?? 0, stats.total)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </div>
 
           <div>
             <h3 className="mb-2 text-sm text-slate-600 dark:text-slate-300">Розподіл за класами</h3>

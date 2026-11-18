@@ -2,6 +2,11 @@
 
 Tests do not depend on the real weights: a randomly initialised ResNet18 of the
 same architecture is saved to a temporary directory and used instead.
+
+A random network is unsure of itself (top-1 probability about 0.55), so every
+prediction would carry a low_confidence warning. A large bias on one output makes
+the test model confident, as the trained one is on most scans. Tests of the
+warning itself replace the model with a stand-in (see test_api.py).
 """
 
 import pytest
@@ -16,6 +21,9 @@ from app.main import create_app
 MAX_UPLOAD_MB = 1
 MAX_PIXELS = 1_000_000
 IN_MEMORY_DB = "sqlite+pysqlite:///:memory:"
+MODEL_VERSION = "test-model"
+LOW_CONFIDENCE_THRESHOLD = 0.9
+CONFIDENT_BIAS = 5.0
 
 
 @pytest.fixture
@@ -31,6 +39,8 @@ def database():
 def weights_path(tmp_path_factory):
     torch.manual_seed(0)
     model = resnet18(weights=None, num_classes=len(CLASS_NAMES))
+    with torch.no_grad():
+        model.fc.bias[CLASS_NAMES.index("notumor")] += CONFIDENT_BIAS
     path = tmp_path_factory.mktemp("weights") / "resnet18_random.pt"
     torch.save(model.state_dict(), path)
     return path
@@ -42,9 +52,11 @@ def settings(weights_path):
     return Settings(
         _env_file=None,
         model_path=weights_path,
+        model_version=MODEL_VERSION,
         device="cpu",
         max_upload_mb=MAX_UPLOAD_MB,
         max_pixels=MAX_PIXELS,
+        low_confidence_threshold=LOW_CONFIDENCE_THRESHOLD,
     )
 
 

@@ -7,7 +7,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError, StatementError
 
 from app.database import Database, create_db_engine
@@ -15,6 +15,12 @@ from app.records import PredictionRecord
 from tests.helpers import make_record
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+CHECK_VIOLATIONS = [
+    {"predicted_class": "astrocytoma"},
+    {"image_width": 0},
+    {"latency_ms": -1.0},
+]
 
 
 def alembic_config(url: str) -> Config:
@@ -107,14 +113,7 @@ def test_naive_timestamps_are_rejected(database):
             session.commit()
 
 
-@pytest.mark.parametrize(
-    "fields",
-    [
-        {"predicted_class": "astrocytoma"},
-        {"image_width": 0},
-        {"latency_ms": -1.0},
-    ],
-)
+@pytest.mark.parametrize("fields", CHECK_VIOLATIONS)
 def test_check_constraints(database, fields):
     with database.session() as session:
         session.add(make_record(**fields))
@@ -137,17 +136,40 @@ def test_no_column_can_hold_the_image_or_its_name():
         "image_sha256",
         "gradcam_requested",
         "latency_ms",
+        "model_version",
     }
 
 
 # --- Migrations ----------------------------------------------------------------
 
 
+def sqlite_url(tmp_path) -> str:
+    return f"sqlite:///{(tmp_path / 'history.db').as_posix()}"
+
+
 @pytest.fixture
 def migrated_url(tmp_path):
-    url = f"sqlite:///{(tmp_path / 'history.db').as_posix()}"
+    url = sqlite_url(tmp_path)
     command.upgrade(alembic_config(url), "head")
     return url
+
+
+def insert_first_schema_row(url: str, record_id: uuid.UUID) -> None:
+    """Insert a record with plain SQL, naming only the columns of migration 0001."""
+    engine = create_db_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO predictions (id, created_at, predicted_class, probabilities, "
+                    "image_width, image_height, warnings, image_sha256, gradcam_requested, "
+                    "latency_ms) VALUES (:id, '2026-11-01 12:00:00.000000', 'glioma', "
+                    "'{\"glioma\": 1.0}', 512, 512, '[]', :sha, 0, 1.5)"
+                ),
+                {"id": record_id.hex, "sha": "0" * 64},
+            )
+    finally:
+        engine.dispose()
 
 
 def test_migrations_match_the_models(migrated_url):
@@ -169,6 +191,61 @@ def test_migrated_database_accepts_records(migrated_url):
     database.dispose()
 
 
+def test_existing_records_get_the_previous_model_version(tmp_path):
+    url = sqlite_url(tmp_path)
+    config = alembic_config(url)
+    command.upgrade(config, "0001")
+    old_id = uuid.uuid4()
+    insert_first_schema_row(url, old_id)
+
+    command.upgrade(config, "head")
+
+    database = Database.from_url(url)
+    with database.session() as session:
+        assert session.get(PredictionRecord, old_id).model_version == "resnet18_v2"
+        new_record = make_record(model_version="resnet18_v2c")
+        session.add(new_record)
+        session.commit()
+        assert session.get(PredictionRecord, new_record.id).model_version == "resnet18_v2c"
+    database.dispose()
+
+
+def test_new_records_must_name_their_model(migrated_url):
+    """The server default is only for old records: without a version, an insert fails."""
+    with pytest.raises(IntegrityError):
+        insert_first_schema_row(migrated_url, uuid.uuid4())
+
+
+@pytest.mark.parametrize("fields", CHECK_VIOLATIONS)
+def test_migrated_database_keeps_check_constraints(migrated_url, fields):
+    database = Database.from_url(migrated_url)
+    with database.session() as session:
+        session.add(make_record(**fields))
+
+        with pytest.raises(IntegrityError):
+            session.commit()
+    database.dispose()
+
+
+def test_downgrade_to_0001_drops_only_the_model_version(migrated_url):
+    database = Database.from_url(migrated_url)
+    with database.session() as session:
+        session.add(make_record())
+        session.commit()
+    database.dispose()
+
+    command.downgrade(alembic_config(migrated_url), "0001")
+
+    engine = create_db_engine(migrated_url)
+    columns = {column["name"] for column in inspect(engine).get_columns("predictions")}
+    with engine.connect() as connection:
+        count = connection.scalar(text("SELECT count(*) FROM predictions"))
+    engine.dispose()
+    assert "model_version" not in columns
+    assert "latency_ms" in columns
+    assert count == 1
+
+
 def test_downgrade_removes_the_table(migrated_url):
     command.downgrade(alembic_config(migrated_url), "base")
 
@@ -187,3 +264,8 @@ def test_offline_sql_targets_postgres(capsys):
     assert "id UUID NOT NULL" in sql
     assert "created_at TIMESTAMP WITH TIME ZONE NOT NULL" in sql
     assert "probabilities JSONB NOT NULL" in sql
+    assert (
+        "ALTER TABLE predictions ADD COLUMN model_version VARCHAR(64) "
+        "DEFAULT 'resnet18_v2' NOT NULL" in sql
+    )
+    assert "ALTER TABLE predictions ALTER COLUMN model_version DROP DEFAULT" in sql

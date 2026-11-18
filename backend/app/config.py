@@ -13,12 +13,20 @@ ClassName = Literal["glioma", "meningioma", "notumor", "pituitary"]
 # (alphabetical order of the dataset folders), so it is not configurable.
 CLASS_NAMES: tuple[ClassName, ...] = get_args(ClassName)
 
-# Scan size the model is reliable on: every glioma in the training data was 512x512.
+# Other sizes get the unexpected_image_size warning: in cross-validation of
+# resnet18_v2c, glioma recall was about 0.51 on them against about 0.99 on 512x512,
+# so a suspected glioma on such a scan is less reliable.
 EXPECTED_IMAGE_SIZE = (512, 512)
+
+# Codes of the warnings /predict returns. /stats reports each of them, even at zero.
+UNEXPECTED_IMAGE_SIZE = "unexpected_image_size"
+LOW_CONFIDENCE = "low_confidence"
+WARNING_CODES = (UNEXPECTED_IMAGE_SIZE, LOW_CONFIDENCE)
 
 
 class Settings(BaseSettings):
-    """Settings taken from MODEL_PATH, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS and DATABASE_URL."""
+    """Settings taken from MODEL_PATH, MODEL_VERSION, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS,
+    LOW_CONFIDENCE_THRESHOLD and DATABASE_URL."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -27,10 +35,15 @@ class Settings(BaseSettings):
         protected_namespaces=(),
     )
 
-    model_path: Path = Path("models/resnet18_v2_best.pt")
+    model_path: Path = Path("models/resnet18_v2c_best.pt")
+    # Name of the weights in MODEL_PATH. It is returned by /health and /predict and
+    # saved with every prediction, so change it together with MODEL_PATH.
+    model_version: str = Field(default="resnet18_v2c", min_length=1, max_length=64)
     device: str = "cpu"
     max_upload_mb: float = Field(default=10, gt=0)
     max_pixels: int = Field(default=16_777_216, gt=0)  # 4096 x 4096
+    # A prediction whose top-1 probability is below this gets a low_confidence warning.
+    low_confidence_threshold: float = Field(default=0.9, ge=0, le=1)
     # SQLAlchemy URL of the prediction history, e.g.
     # postgresql+psycopg://user:password@localhost:5432/brain_mri.
     # Without it the service still predicts, but keeps no history.

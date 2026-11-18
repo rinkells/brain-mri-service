@@ -7,8 +7,8 @@ from PIL import Image
 
 from app.config import CLASS_NAMES, Settings
 from app.main import create_app
-from app.model import ModelLoadError
-from tests.conftest import MAX_UPLOAD_MB
+from app.model import ModelLoadError, Prediction
+from tests.conftest import MAX_UPLOAD_MB, MODEL_VERSION
 from tests.helpers import image_bytes
 
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -52,7 +52,12 @@ def test_health(client):
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "device": "cpu", "classes": list(CLASS_NAMES)}
+    assert response.json() == {
+        "status": "ok",
+        "device": "cpu",
+        "classes": list(CLASS_NAMES),
+        "model_version": MODEL_VERSION,
+    }
 
 
 # --- POST /predict: successful requests ----------------------------------------
@@ -73,6 +78,7 @@ def test_predict_512_scan(client, fmt, filename, content_type):
     assert body["image_size"] == {"width": 512, "height": 512}
     assert body["warnings"] == []
     assert body["gradcam_png_base64"] is None
+    assert body["model_version"] == MODEL_VERSION
 
 
 @pytest.mark.parametrize("size", [(630, 630), (640, 480), (512, 511)])
@@ -82,9 +88,14 @@ def test_predict_warns_about_other_sizes(client, size):
     assert response.status_code == 200
     body = response.json()
     assert body["image_size"] == {"width": size[0], "height": size[1]}
-    assert [w["code"] for w in body["warnings"]] == ["unexpected_image_size"]
-    assert f"{size[0]}x{size[1]}" in body["warnings"][0]["message"]
-    assert "512x512" in body["warnings"][0]["message"]
+    assert body["warnings"] == [
+        {
+            "code": "unexpected_image_size",
+            "message": "Розмір знімка відрізняється від 512×512. Для гліом такого формату "
+            "recall у перевірці був ≈ 0,51 (проти ≈ 0,99 для 512×512): якщо є підозра на "
+            "гліому, результат менш надійний.",
+        }
+    ]
 
 
 @pytest.mark.parametrize("size", [(512, 512), (640, 480)])
@@ -121,6 +132,81 @@ def test_format_is_detected_from_content_not_from_name(client):
     response = post_image(client, image_bytes(512, 512, "PNG"), "notes.txt", "text/plain")
 
     assert response.status_code == 200
+
+
+# --- Low confidence warning ----------------------------------------------------
+
+
+class FixedClassifier:
+    """Stands in for the model: always predicts glioma with the given probability."""
+
+    def __init__(self, device, top_probability: float) -> None:
+        self.device = device
+        rest = (1 - top_probability) / 3
+        self.prediction = Prediction(
+            "glioma",
+            {"glioma": top_probability, "meningioma": rest, "notumor": rest, "pituitary": rest},
+        )
+
+    def predict(self, image, with_cam=False) -> Prediction:
+        return self.prediction
+
+
+@pytest.fixture
+def with_top_probability(client):
+    """The shared app with a stand-in model whose top-1 probability the test chooses."""
+    app = client.app
+    real_classifier, real_settings = app.state.classifier, app.state.settings
+
+    def use(probability: float):
+        app.state.classifier = FixedClassifier(real_classifier.device, probability)
+        return client
+
+    yield use
+    app.state.classifier, app.state.settings = real_classifier, real_settings
+
+
+@pytest.mark.parametrize(
+    ("top_probability", "warned"),
+    [(0.89, True), (0.90, False), (0.99, False), (0.8999999, True)],
+    # 0.8999999 is shown as 90,0 %, but the raw value is below the threshold.
+    ids=["0.89", "0.90", "0.99", "0.8999999-before-rounding"],
+)
+def test_low_confidence_threshold(with_top_probability, top_probability, warned):
+    response = post_image(with_top_probability(top_probability), image_bytes(512, 512))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["probabilities"]["glioma"] == top_probability
+    if warned:
+        assert [w["code"] for w in body["warnings"]] == ["low_confidence"]
+    else:
+        assert body["warnings"] == []
+
+
+def test_low_confidence_warning_message(with_top_probability):
+    body = post_image(with_top_probability(0.5), image_bytes(512, 512)).json()
+
+    assert body["warnings"] == [
+        {
+            "code": "low_confidence",
+            "message": "Модель недостатньо впевнена в цьому прогнозі: ймовірність "
+            "передбаченого класу нижча за 90 %.",
+        }
+    ]
+
+
+def test_low_confidence_comes_with_size_warning(with_top_probability):
+    body = post_image(with_top_probability(0.5), image_bytes(640, 480)).json()
+
+    assert [w["code"] for w in body["warnings"]] == ["unexpected_image_size", "low_confidence"]
+
+
+def test_threshold_is_taken_from_settings(with_top_probability, settings):
+    client = with_top_probability(0.85)
+    client.app.state.settings = settings.model_copy(update={"low_confidence_threshold": 0.8})
+
+    assert post_image(client, image_bytes(512, 512)).json()["warnings"] == []
 
 
 # --- 400: not an image ---------------------------------------------------------

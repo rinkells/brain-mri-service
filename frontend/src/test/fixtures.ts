@@ -17,6 +17,7 @@ export function healthyResponse(): Response {
     status: 'ok',
     device: 'cpu',
     classes: ['glioma', 'meningioma', 'notumor', 'pituitary'],
+    model_version: 'resnet18_v2c',
   })
 }
 
@@ -28,6 +29,7 @@ export function makePrediction(overrides: Partial<PredictionResponse> = {}): Pre
     image_size: { width: 512, height: 512 },
     warnings: [],
     gradcam_png_base64: null,
+    model_version: 'resnet18_v2c',
     ...overrides,
   }
 }
@@ -45,6 +47,7 @@ export function makeRecord(n: number, overrides: Partial<PredictionRecord> = {})
     image_sha256: 'a'.repeat(64),
     gradcam_requested: false,
     latency_ms: 100,
+    model_version: 'resnet18_v2c',
     ...overrides,
   }
 }
@@ -62,6 +65,7 @@ export function makeStats(overrides: Partial<StatsResponse> = {}): StatsResponse
     by_class: { glioma: 2, meningioma: 1, notumor: 1, pituitary: 0 },
     with_warnings_share: 0.25,
     average_latency_ms: 154.5,
+    warnings_by_code: { unexpected_image_size: 1, low_confidence: 0 },
     ...overrides,
   }
 }

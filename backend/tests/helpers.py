@@ -39,6 +39,7 @@ def make_record(**fields) -> PredictionRecord:
         "image_sha256": "0" * 64,
         "gradcam_requested": False,
         "latency_ms": 12.5,
+        "model_version": "resnet18_v2c",
     }
     values.update(fields)
     return PredictionRecord(**values)

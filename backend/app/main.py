@@ -14,7 +14,14 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
-from app.config import CLASS_NAMES, EXPECTED_IMAGE_SIZE, Settings, get_settings
+from app.config import (
+    CLASS_NAMES,
+    EXPECTED_IMAGE_SIZE,
+    LOW_CONFIDENCE,
+    UNEXPECTED_IMAGE_SIZE,
+    Settings,
+    get_settings,
+)
 from app.database import Database
 from app.gradcam import encode_png_base64, overlay_heatmap
 from app.history import save_prediction
@@ -96,24 +103,46 @@ ERROR_RESPONSES = {
 }
 
 
+# The recall figures come from the 5-fold cross-validation of resnet18_v2c (see README).
+SIZE_WARNING_MESSAGE = (
+    "Розмір знімка відрізняється від 512×512. Для гліом такого формату recall у перевірці "
+    "був ≈ 0,51 (проти ≈ 0,99 для 512×512): якщо є підозра на гліому, результат менш надійний."
+)
+
+
 def size_warning(width: int, height: int) -> PredictionWarning | None:
     if (width, height) == EXPECTED_IMAGE_SIZE:
         return None
-    expected = "x".join(map(str, EXPECTED_IMAGE_SIZE))
+    return PredictionWarning(code=UNEXPECTED_IMAGE_SIZE, message=SIZE_WARNING_MESSAGE)
+
+
+def confidence_warning(probability: float, threshold: float) -> PredictionWarning | None:
+    """Warn when the top-1 probability is below the threshold.
+
+    The raw probability is compared, never a rounded one: 0.8999 is below 0.9 even
+    though the interface shows it as 90,0 %.
+    """
+    if probability >= threshold:
+        return None
     return PredictionWarning(
-        code="unexpected_image_size",
+        code=LOW_CONFIDENCE,
         message=(
-            f"Розмір знімка {width}x{height}, а не {expected}. На знімках іншого розміру "
-            "модель працює гірше і може пропустити гліому, бо в навчальних даних усі "
-            f"гліоми були {expected}."
+            "Модель недостатньо впевнена в цьому прогнозі: ймовірність передбаченого класу "
+            f"нижча за {threshold * 100:g} %."
         ),
     )
 
 
 @router.get("/health", response_model=HealthResponse, summary="Стан сервісу")
 def health(request: Request) -> HealthResponse:
+    settings: Settings = request.app.state.settings
     classifier: BrainMRIClassifier = request.app.state.classifier
-    return HealthResponse(status="ok", device=str(classifier.device), classes=list(CLASS_NAMES))
+    return HealthResponse(
+        status="ok",
+        device=str(classifier.device),
+        classes=list(CLASS_NAMES),
+        model_version=settings.model_version,
+    )
 
 
 @router.post(
@@ -152,8 +181,12 @@ def predict(
     if prediction.cam is not None:
         heatmap = encode_png_base64(overlay_heatmap(image, prediction.cam))
 
-    warning = size_warning(*image.size)
-    warnings = [warning] if warning else []
+    top_probability = prediction.probabilities[prediction.predicted_class]
+    candidates = (
+        size_warning(*image.size),
+        confidence_warning(top_probability, settings.low_confidence_threshold),
+    )
+    warnings = [warning for warning in candidates if warning is not None]
     latency_ms = (time.perf_counter() - started) * 1000
 
     # Only the outcome is stored: never the scan itself or its file name.
@@ -168,6 +201,7 @@ def predict(
             image_sha256=hashlib.sha256(data).hexdigest(),
             gradcam_requested=gradcam,
             latency_ms=latency_ms,
+            model_version=settings.model_version,
         ),
     )
 
@@ -178,6 +212,7 @@ def predict(
         image_size=ImageSize(width=image.width, height=image.height),
         warnings=warnings,
         gradcam_png_base64=heatmap,
+        model_version=settings.model_version,
     )
 
 
@@ -194,7 +229,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # A missing or incompatible weights file stops the service right at startup.
         classifier = BrainMRIClassifier.from_file(settings.model_path, settings.device)
         app.state.classifier = classifier
-        logger.info("Model loaded from %s on %s", settings.model_path, classifier.device)
+        logger.info(
+            "Model %s loaded from %s on %s",
+            settings.model_version,
+            settings.model_path,
+            classifier.device,
+        )
 
         # The database is not contacted here: predictions must work even while it is down.
         app.state.database = None

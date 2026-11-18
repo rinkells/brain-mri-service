@@ -13,6 +13,7 @@ class HealthResponse(BaseModel):
     status: Literal["ok"]
     device: str = Field(description="Пристрій, на якому працює модель")
     classes: list[ClassName] = Field(description="Класи в порядку виходів моделі")
+    model_version: str = Field(description="Версія моделі (MODEL_VERSION)")
 
 
 class ImageSize(BaseModel):
@@ -42,6 +43,7 @@ class PredictionResponse(BaseModel):
         default=None,
         description="Теплова карта Grad-CAM поверх знімка (PNG у base64); лише з ?gradcam=true",
     )
+    model_version: str = Field(description="Версія моделі, що зробила прогноз")
 
 
 class PredictionRecordResponse(BaseModel):
@@ -56,6 +58,10 @@ class PredictionRecordResponse(BaseModel):
     image_sha256: str = Field(description="SHA-256 завантаженого файлу (hex)")
     gradcam_requested: bool = Field(description="Чи запитували теплову карту")
     latency_ms: float = Field(description="Час обробки запиту без збереження в історію, мс")
+    model_version: str = Field(
+        description="Версія моделі, що зробила прогноз; resnet18_v2 для записів, збережених "
+        "до появи цього поля"
+    )
 
 
 class PredictionPage(BaseModel):
@@ -73,6 +79,12 @@ class StatsResponse(BaseModel):
     )
     average_latency_ms: float | None = Field(
         description="Середній час обробки, мс; null, якщо прогнозів немає"
+    )
+    warnings_by_code: dict[str, int] = Field(
+        description=(
+            "Кількість прогнозів із кожним кодом попередження. Прогноз із кількома "
+            "попередженнями враховується в кожному з них; відомі коди є завжди, навіть з 0"
+        )
     )
 
 

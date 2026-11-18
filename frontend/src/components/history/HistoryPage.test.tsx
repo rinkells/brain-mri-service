@@ -20,6 +20,7 @@ const EMPTY_STATS = makeStats({
   by_class: { glioma: 0, meningioma: 0, notumor: 0, pituitary: 0 },
   with_warnings_share: null,
   average_latency_ms: null,
+  warnings_by_code: { unexpected_image_size: 0, low_confidence: 0 },
 })
 
 /** A fake history of `total` records served page by page, newest first. */
@@ -72,7 +73,7 @@ describe('statistics', () => {
 
     const total = await screen.findByText('Усього прогнозів')
     expect(total.closest('div')).toHaveTextContent('4')
-    expect(screen.getByText('З попередженнями').closest('div')).toHaveTextContent(
+    expect(screen.getByText('З будь-яким попередженням').closest('div')).toHaveTextContent(
       formatPercent(0.25),
     )
     expect(screen.getByText('Середній час обробки').closest('div')).toHaveTextContent(
@@ -92,7 +93,47 @@ describe('statistics', () => {
     render(<HistoryPage />)
 
     expect((await screen.findByText('Усього прогнозів')).closest('div')).toHaveTextContent('0')
-    expect(screen.getAllByText('—')).toHaveLength(2)
+    // Two cards and the two warning types.
+    expect(screen.getAllByText('—')).toHaveLength(4)
+    expect(screen.getByText('Низька впевненість').closest('div')).toHaveTextContent('—')
+  })
+
+  test('splits warnings by type and labels the overall share as any warning', async () => {
+    mockApi({
+      predictions: () => jsonResponse(makePage([])),
+      stats: () =>
+        jsonResponse(
+          makeStats({
+            total: 8,
+            with_warnings_share: 0.75,
+            warnings_by_code: { low_confidence: 2, unexpected_image_size: 6 },
+          }),
+        ),
+    })
+
+    render(<HistoryPage />)
+
+    const any = await screen.findByText('З будь-яким попередженням')
+    expect(any.closest('div')).toHaveTextContent(formatPercent(0.75))
+    expect(screen.queryByText('З попередженнями')).not.toBeInTheDocument()
+    expect(screen.getByText('Низька впевненість').closest('div')).toHaveTextContent(
+      `${formatPercent(0.25)} (2)`,
+    )
+    expect(screen.getByText('Нетиповий розмір знімка').closest('div')).toHaveTextContent(
+      `${formatPercent(0.75)} (6)`,
+    )
+  })
+
+  test('treats a warning code missing from the response as zero', async () => {
+    mockApi({
+      predictions: () => jsonResponse(makePage([])),
+      stats: () => jsonResponse(makeStats({ total: 4, warnings_by_code: {} })),
+    })
+
+    render(<HistoryPage />)
+
+    const row = (await screen.findByText('Низька впевненість')).closest('div')
+    expect(row).toHaveTextContent(`${formatPercent(0)} (0)`)
   })
 })
 
@@ -120,14 +161,87 @@ describe('table', () => {
       .map((cell) => cell.textContent)
     expect(firstCells.slice(0, 5)).toEqual([
       formatDateTime(records[0].created_at),
-      'Пухлини не виявлено',
+      'Пухлини не виявленомодель resnet18_v2c',
       formatPercent(0.7),
       '640×480',
-      'Так',
+      'Нетиповий розмір',
     ])
-    expect(within(first).getByText('Так')).toHaveAttribute('title', 'Розмір знімка 640x480.')
+    expect(within(first).getByText('Нетиповий розмір')).toHaveAttribute(
+      'title',
+      'Розмір знімка 640x480.',
+    )
     expect(within(second).getByText('Гліома')).toBeInTheDocument()
     expect(within(second).getByText('Ні')).toBeInTheDocument()
+  })
+
+  test('marks warnings in yellow only for low confidence, the image size in grey', async () => {
+    const lowConfidence = { code: 'low_confidence', message: 'Модель недостатньо впевнена.' }
+    const imageSize = { code: 'unexpected_image_size', message: 'Розмір знімка не 512×512.' }
+    const records = [
+      makeRecord(4, { warnings: [lowConfidence] }),
+      makeRecord(3, { warnings: [imageSize] }),
+      makeRecord(2, { warnings: [imageSize, lowConfidence] }),
+      makeRecord(1, { warnings: [] }),
+    ]
+    mockApi({
+      predictions: () => jsonResponse(makePage(records)),
+      stats: () => jsonResponse(makeStats()),
+    })
+
+    render(<HistoryPage />)
+
+    await screen.findAllByText('Гліома')
+    const [onlyLow, onlySize, both, none] = rows().map((row) => within(row).getAllByRole('cell')[4])
+    const yellow = (cell: HTMLElement) => cell.querySelector('.bg-amber-100')
+
+    expect(yellow(onlyLow)).toHaveTextContent('Низька впевненість')
+    expect(yellow(onlyLow)).toHaveAttribute('title', lowConfidence.message)
+    expect(within(onlyLow).queryByText('Нетиповий розмір')).not.toBeInTheDocument()
+
+    expect(yellow(onlySize)).not.toBeInTheDocument()
+    const sizeMark = within(onlySize).getByText('Нетиповий розмір')
+    expect(sizeMark).toHaveClass('text-xs', 'text-slate-500')
+    expect(sizeMark).toHaveAttribute('title', imageSize.message)
+    expect(sizeMark.querySelector('[data-icon="info"]')).toBeInTheDocument()
+
+    expect(yellow(both)).toHaveTextContent('Низька впевненість')
+    expect(within(both).getByText('Нетиповий розмір')).not.toHaveClass('bg-amber-100')
+
+    expect(yellow(none)).not.toBeInTheDocument()
+    expect(none).toHaveTextContent('Ні')
+  })
+
+  test('shows warnings the interface does not know in yellow', async () => {
+    const unknown = { code: 'some_future_warning', message: 'Нове попередження.' }
+    mockApi({
+      predictions: () => jsonResponse(makePage([makeRecord(1, { warnings: [unknown] })])),
+      stats: () => jsonResponse(makeStats()),
+    })
+
+    render(<HistoryPage />)
+
+    const badge = await screen.findByText('Інше')
+    expect(badge).toHaveClass('bg-amber-100')
+    expect(badge).toHaveAttribute('title', unknown.message)
+  })
+
+  test('shows the model version of each prediction in small text', async () => {
+    const records = [
+      makeRecord(2, { model_version: 'resnet18_v2c' }),
+      makeRecord(1, { model_version: 'resnet18_v2' }),
+    ]
+    mockApi({
+      predictions: () => jsonResponse(makePage(records)),
+      stats: () => jsonResponse(makeStats()),
+    })
+
+    render(<HistoryPage />)
+
+    const newer = await screen.findByText('модель resnet18_v2c')
+    expect(newer).toHaveClass('text-xs')
+    const [first, second] = rows()
+    expect(within(first).getByText('модель resnet18_v2c')).toBeInTheDocument()
+    expect(within(second).getByText('модель resnet18_v2')).toBeInTheDocument()
   })
 
   test('asks for the first ten records', async () => {

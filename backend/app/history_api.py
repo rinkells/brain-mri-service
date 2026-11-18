@@ -57,6 +57,7 @@ def to_response(record: PredictionRecord) -> PredictionRecordResponse:
         image_sha256=record.image_sha256,
         gradcam_requested=record.gradcam_requested,
         latency_ms=record.latency_ms,
+        model_version=record.model_version,
     )
 
 
@@ -114,4 +115,5 @@ def stats(session: SessionDep) -> StatsResponse:
         by_class=result.by_class,
         with_warnings_share=result.with_warnings_share,
         average_latency_ms=result.average_latency_ms,
+        warnings_by_code=result.warnings_by_code,
     )

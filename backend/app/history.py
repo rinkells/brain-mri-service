@@ -10,7 +10,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.functions import FunctionElement
 
-from app.config import CLASS_NAMES, ClassName
+from app.config import CLASS_NAMES, WARNING_CODES, ClassName
 from app.database import Database
 from app.records import PredictionRecord
 
@@ -98,6 +98,26 @@ class HistoryStats:
     by_class: dict[ClassName, int]
     with_warnings_share: float | None
     average_latency_ms: float | None
+    warnings_by_code: dict[str, int]
+
+
+def count_warning_codes(session: Session) -> dict[str, int]:
+    """Number of predictions with each warning code; known codes are always present.
+
+    A prediction with several warnings counts once for each of its codes. The codes
+    are counted in Python: unpacking a JSON array in SQL takes different functions on
+    Postgres and SQLite. Only records that have warnings are read.
+    """
+    counts = dict.fromkeys(WARNING_CODES, 0)
+    rows = session.scalars(
+        select(PredictionRecord.warnings)
+        .where(json_array_length(PredictionRecord.warnings) > 0)
+        .execution_options(yield_per=1000)
+    )
+    for warnings in rows:
+        for code in {warning["code"] for warning in warnings}:
+            counts[code] = counts.get(code, 0) + 1
+    return counts
 
 
 def compute_stats(session: Session) -> HistoryStats:
@@ -124,4 +144,5 @@ def compute_stats(session: Session) -> HistoryStats:
         by_class=counts,
         with_warnings_share=with_warnings / total if total else None,
         average_latency_ms=float(average_latency) if average_latency is not None else None,
+        warnings_by_code=count_warning_codes(session),
     )
