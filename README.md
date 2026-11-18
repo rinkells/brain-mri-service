@@ -630,6 +630,11 @@ Grad-CAM показує, на що зважала модель, а не межі
   Його API для генерації типів у TypeScript 6 не змінилося, тому в `package.json` через
   `overrides` йому дозволено використовувати TypeScript проєкту, і `npm ci` працює без
   `--legacy-peer-deps`.
+- **pip і setuptools в образі.** `backend/Dockerfile` першим кроком оновлює pip до 26.3 і
+  setuptools до 84.2.1, бо версії з базового образу `python:3.12-slim` мають відомі вразливості
+  (pip: CVE-2025-8869; setuptools: CVE-2024-6345, CVE-2025-47273). setuptools не видалено:
+  PyTorch оголошує його залежністю. Версії залежностей застосунку з `requirements.txt` не
+  змінювалися.
 - **Кінці рядків.** `.gitattributes` вимагає LF у робочій копії на всіх системах, бо
   Prettier перевіряє саме LF.
 
