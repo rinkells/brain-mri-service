@@ -6,6 +6,12 @@ services:
   db:
     image: postgres:16
     restart: unless-stopped
+    # Memory and process limits only. Capabilities are left alone: the entrypoint
+    # changes the owner of the data directory and switches to the postgres user.
+    mem_limit: 512m
+    # One process per connection: 100 connections (the Postgres default) plus the
+    # background workers still fit.
+    pids_limit: 256
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
@@ -25,6 +31,18 @@ services:
   api:
     build: ./backend
     restart: unless-stopped
+    # Measured outside Docker (Windows): ~400 MiB after start-up, ~1040 MiB at most while
+    # torch loads, ~780 MiB during two 4096x4096 predictions with Grad-CAM at once
+    # (MAX_CONCURRENT_INFERENCES=2). Raise it together with MAX_CONCURRENT_INFERENCES.
+    mem_limit: 1500m
+    cpus: 2
+    pids_limit: 200
+    # The server runs as an unprivileged user on port 8000 and needs no capabilities,
+    # nor may it gain any (e.g. through a setuid binary).
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       db:
         condition: service_healthy
