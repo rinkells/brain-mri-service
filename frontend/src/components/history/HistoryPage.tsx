@@ -26,6 +26,12 @@ export function HistoryPage() {
   const stats = useStats(reloadToken)
   const page = history.data
 
+  // Records removed elsewhere (another tab) can leave this page past the end of the list:
+  // go to the last page that still exists. Only fresh data for this very page counts.
+  if (page && !history.loading && page.offset === offset && offset > 0 && offset >= page.total) {
+    setOffset(Math.max(0, Math.ceil(page.total / HISTORY_PAGE_SIZE) - 1) * HISTORY_PAGE_SIZE)
+  }
+
   function changeFilter(value: ClassName | '') {
     setClassFilter(value)
     setOffset(0)

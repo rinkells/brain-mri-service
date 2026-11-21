@@ -524,6 +524,28 @@ describe('deleting a record', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
+  test('when records vanish in another tab, the last page that exists is shown', async () => {
+    const records = newestFirst(21)
+    const { history, user } = setup(records, 404)
+    render(<HistoryPage />)
+    await screen.findByText('Показано 1–10 з 21')
+    await user.click(screen.getByRole('button', { name: 'Наступна' }))
+    await screen.findByText('Показано 11–20 з 21')
+    await user.click(screen.getByRole('button', { name: 'Наступна' }))
+    await screen.findByText('Показано 21–21 з 21')
+
+    // Another tab deletes the only record of page 3; this tab still shows it.
+    history.remove(records[20].id)
+    await user.click(screen.getByRole('button', { name: /^Видалити запис від/ }))
+    await user.click(screen.getByRole('button', { name: 'Так' }))
+
+    expect(await screen.findByText('Показано 11–20 з 20')).toBeInTheDocument()
+    // The pager moves first; the rows of page 2 follow when they arrive.
+    await waitFor(() => expect(rows()).toHaveLength(10))
+    expect(screen.queryByText(/Показано 21–20/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Історія порожня/)).not.toBeInTheDocument()
+  })
+
   test('a record that is already gone is reported and the list is refreshed', async () => {
     const records = newestFirst(1)
     const { fetchMock, user } = setup(records, 404)
