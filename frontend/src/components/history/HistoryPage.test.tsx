@@ -391,10 +391,14 @@ describe('deleting a record', () => {
           history.remove(id)
           return new Response(null, { status: 204 })
         }
-        return jsonResponse({ detail: 'Прогноз не знайдено.' }, deleteStatus)
+        const detail =
+          deleteStatus === 404
+            ? 'Прогноз не знайдено.'
+            : 'База даних недоступна. Спробуйте пізніше.'
+        return jsonResponse({ detail }, deleteStatus)
       },
     })
-    return { fetchMock, user: userEvent.setup() }
+    return { fetchMock, history, user: userEvent.setup() }
   }
 
   test('asks for confirmation, deletes and refreshes the list and statistics', async () => {
@@ -444,6 +448,22 @@ describe('deleting a record', () => {
     await user.click(screen.getByRole('button', { name: 'Так' }))
 
     expect(await screen.findByText('Показано 1–10 з 10')).toBeInTheDocument()
+  })
+
+  test('a failed delete stays on the page of the record', async () => {
+    const records = newestFirst(11)
+    const { user } = setup(records, 503)
+    render(<HistoryPage />)
+    await screen.findByText('Показано 1–10 з 11')
+    await user.click(screen.getByRole('button', { name: 'Наступна' }))
+    await screen.findByText('Показано 11–11 з 11')
+
+    await user.click(screen.getByRole('button', { name: /^Видалити запис від/ }))
+    await user.click(screen.getByRole('button', { name: 'Так' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Історія недоступна')
+    expect(await screen.findByText('Показано 11–11 з 11')).toBeInTheDocument()
+    expect(screen.queryByText('Показано 1–10 з 11')).not.toBeInTheDocument()
   })
 
   test('a record that is already gone is reported and the list is refreshed', async () => {

@@ -34,14 +34,17 @@ export function HistoryPage() {
 
   async function handleDelete(id: string) {
     setDeleteError(null)
+    let deleted = false
     try {
       await deletePrediction(id)
+      deleted = true
     } catch (error) {
       // A 404 means it is already gone; reloading below shows the current state anyway.
       setDeleteError(error)
     }
-    // Step back when the last record of a later page was removed.
-    if (page && page.items.length === 1 && offset > 0) {
+    // Step back when the last record of a later page was removed. After a failure the
+    // record is still there, so the page stays.
+    if (deleted && page && page.items.length === 1 && offset > 0) {
       setOffset(Math.max(0, offset - HISTORY_PAGE_SIZE))
     }
     setReloadToken((token) => token + 1)
