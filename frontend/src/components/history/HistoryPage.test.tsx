@@ -236,7 +236,8 @@ describe('table', () => {
   test('marks images that do not look like an MRI scan with a yellow badge', async () => {
     const notMri = {
       code: 'not_mri_like',
-      message: 'Зображення не схоже на знімок МРТ (кольорове, шумне або майже однорідне).',
+      message:
+        'Зображення не схоже на знімок МРТ (кольорове, шумне, однорідне або без темного фону).',
     }
     mockApi({
       predictions: () => jsonResponse(makePage([makeRecord(1, { warnings: [notMri] })])),

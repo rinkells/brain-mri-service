@@ -19,7 +19,7 @@ const SIZE: PredictionWarning = {
 const NOT_MRI_LIKE: PredictionWarning = {
   code: 'not_mri_like',
   message:
-    'Зображення не схоже на знімок МРТ (кольорове, шумне або майже однорідне). ' +
+    'Зображення не схоже на знімок МРТ (кольорове, шумне, однорідне або без темного фону). ' +
     'Результат не можна вважати достовірним.',
 }
 // A code the interface has no special presentation for.
