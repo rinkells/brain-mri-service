@@ -1,5 +1,5 @@
 import { MAX_UPLOAD_BYTES } from './config'
-import { formatMegabytes } from './format'
+import { formatMegabytes, formatSizeOverLimit } from './format'
 
 const ACCEPTED_TYPES: readonly string[] = ['image/jpeg', 'image/png']
 const ACCEPTED_EXTENSIONS: readonly string[] = ['.jpg', '.jpeg', '.png']
@@ -28,7 +28,8 @@ export function validateImageFile(file: File, maxBytes = MAX_UPLOAD_BYTES): stri
     return `Файл «${file.name}» порожній.`
   }
   if (file.size > maxBytes) {
-    return `Файл завеликий (${formatMegabytes(file.size)}). Максимум — ${formatMegabytes(maxBytes)}.`
+    const size = formatSizeOverLimit(file.size, maxBytes)
+    return `Файл завеликий (${size}). Максимум — ${formatMegabytes(maxBytes)}.`
   }
   return null
 }

@@ -4,16 +4,22 @@ const percentFormat = new Intl.NumberFormat('uk-UA', {
   maximumFractionDigits: 1,
 })
 
-const megabyteFormat = new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 1 })
+const megabyteFormats = new Map<number, Intl.NumberFormat>()
+const byteFormat = new Intl.NumberFormat('uk-UA')
 
 /** 0.8044 -> "80,4 %" */
 export function formatPercent(value: number): string {
   return percentFormat.format(value)
 }
 
-/** 12_345_678 -> "11,8 МБ" */
-export function formatMegabytes(bytes: number): string {
-  return `${megabyteFormat.format(bytes / 1024 / 1024)} МБ`
+/** 12_345_678 -> "11,8 МБ"; up to `fractionDigits` decimals, trailing zeros dropped. */
+export function formatMegabytes(bytes: number, fractionDigits = 1): string {
+  let format = megabyteFormats.get(fractionDigits)
+  if (!format) {
+    format = new Intl.NumberFormat('uk-UA', { maximumFractionDigits: fractionDigits })
+    megabyteFormats.set(fractionDigits, format)
+  }
+  return `${format.format(bytes / 1024 / 1024)} МБ`
 }
 
 /**
@@ -27,6 +33,25 @@ export function formatFileSize(bytes: number): string {
   }
   // A whole number from 0 to 1023: no decimal separator or digit grouping to format.
   return `${bytes > 0 ? Math.max(kilobytes, 1) : 0} КБ`
+}
+
+/**
+ * Size of a file that is over the limit, never written the same as the limit:
+ * 10_490_000 bytes over 10 MB -> "10,004 МБ", not "10 МБ". Up to three decimals,
+ * then the exact number of bytes.
+ */
+export function formatSizeOverLimit(bytes: number, limitBytes: number): string {
+  const size = formatFileSize(bytes)
+  if (size !== formatMegabytes(limitBytes)) {
+    return size
+  }
+  for (const digits of [2, 3]) {
+    const precise = formatMegabytes(bytes, digits)
+    if (precise !== formatMegabytes(limitBytes, digits)) {
+      return precise
+    }
+  }
+  return `${byteFormat.format(bytes)} Б`
 }
 
 const dateTimeFormat = new Intl.DateTimeFormat('uk-UA', { dateStyle: 'short', timeStyle: 'medium' })
