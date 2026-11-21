@@ -1,8 +1,8 @@
 import { useId, useState, type ChangeEvent, type DragEvent } from 'react'
 
 import type { ImageSelection } from '../../hooks/useImageSelection'
-import { MAX_UPLOAD_MB } from '../../lib/config'
-import { formatFileSize } from '../../lib/format'
+import { MAX_UPLOAD_BYTES } from '../../lib/config'
+import { formatFileSize, formatMegabytes } from '../../lib/format'
 import { ACCEPT_ATTRIBUTE } from '../../lib/validation'
 
 interface UploadZoneProps {
@@ -93,7 +93,7 @@ export function UploadZone({ selection, error, onFile, onClear }: UploadZoneProp
           </label>
         </p>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          JPEG або PNG, до {MAX_UPLOAD_MB} МБ
+          JPEG або PNG, до {formatMegabytes(MAX_UPLOAD_BYTES)}
         </p>
 
         <input
