@@ -5,8 +5,10 @@ Revises: 0003
 Create Date: 2026-11-21 16:00:00.000000
 
 Nothing read the file hash, and it identifies the scan, so it is no longer kept.
-The hashes already stored are deleted with the column; a downgrade cannot bring
-them back, so it restores the column as nullable and old records get NULL.
+On Postgres, DROP COLUMN only marks the column as dropped: the old values stay in the
+table's files until it is rewritten, so `VACUUM FULL predictions` is recommended once
+after this migration (see the README). A downgrade cannot bring the hashes back, so it
+restores the column as nullable and old records get NULL.
 """
 
 from collections.abc import Sequence
