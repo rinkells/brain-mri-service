@@ -4,9 +4,12 @@ import json
 import re
 import shutil
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+
+from app.input_check import NotMriThresholds
 
 REPO_DIR = Path(__file__).resolve().parents[2]
 MIB = 1024 * 1024
@@ -92,23 +95,34 @@ def test_app_dependency_pins_are_left_alone():
     assert "setuptools" not in requirements
 
 
+# NOT_MRI_COLOR_MAX and the rest, named after the fields of NotMriThresholds: the Python
+# defaults are the single source, and every deployment file must repeat them.
 NOT_MRI_DEFAULTS = {
-    "NOT_MRI_COLOR_MAX": "7",
-    "NOT_MRI_NOISE_MAX": "0.85",
-    "NOT_MRI_STD_MIN": "10",
-    "NOT_MRI_LOWCONTRAST_STD": "30",
-    "NOT_MRI_DARK_MIN": "0.15",
+    f"NOT_MRI_{name.upper()}": value for name, value in asdict(NotMriThresholds()).items()
 }
 
 
-def test_not_mri_thresholds_reach_the_api(services):
-    environment = services["api"]["environment"]
+def as_numbers(values: dict[str, str]) -> dict[str, float]:
+    assert set(NOT_MRI_DEFAULTS) <= set(values), "missing NOT_MRI_* settings"
+    return {name: float(values[name]) for name in NOT_MRI_DEFAULTS}
 
-    assert {name: environment[name] for name in NOT_MRI_DEFAULTS} == NOT_MRI_DEFAULTS
+
+def test_not_mri_thresholds_reach_the_api(services):
+    """Values the api container gets with the example env file."""
+    assert as_numbers(services["api"]["environment"]) == NOT_MRI_DEFAULTS
+
+
+def test_compose_falls_back_to_the_default_not_mri_thresholds():
+    """Values the api container gets when .env does not set them: ${NAME:-value}."""
+    text = (REPO_DIR / "docker-compose.yml").read_text(encoding="utf-8")
+    fallbacks = dict(re.findall(r"\$\{(NOT_MRI_[A-Z_]+):-([^}]*)\}", text))
+
+    assert as_numbers(fallbacks) == NOT_MRI_DEFAULTS
 
 
 @pytest.mark.parametrize("path", [".env.example", "backend/.env.example"])
-def test_example_env_files_list_the_not_mri_thresholds(path):
+def test_example_env_files_hold_the_default_not_mri_thresholds(path):
     lines = (REPO_DIR / path).read_text(encoding="utf-8").splitlines()
+    values = dict(line.split("=", 1) for line in lines if line.startswith("NOT_MRI_"))
 
-    assert {f"{name}={value}" for name, value in NOT_MRI_DEFAULTS.items()} <= set(lines)
+    assert as_numbers(values) == NOT_MRI_DEFAULTS
