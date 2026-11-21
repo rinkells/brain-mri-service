@@ -2,7 +2,8 @@
 
 Only the outcome of a prediction is stored. The scan itself and the file name
 are never saved: they are medical data. The SHA-256 of the file is kept so
-repeated uploads of the same scan can be recognised.
+repeated uploads of the same scan can be recognised in the database; the API
+never returns it, because it identifies the scan.
 """
 
 import uuid
@@ -58,6 +59,10 @@ class PredictionRecord(Base):
         CheckConstraint(f"predicted_class IN ({_CLASS_LIST})", name="predicted_class"),
         CheckConstraint("image_width > 0 AND image_height > 0", name="image_size"),
         CheckConstraint("latency_ms >= 0", name="latency_ms"),
+        # Postgres only (migration 0003): SQLite, used in tests, has no jsonb_typeof.
+        CheckConstraint("jsonb_typeof(warnings) = 'array'", name="warnings_is_array").ddl_if(
+            dialect="postgresql"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

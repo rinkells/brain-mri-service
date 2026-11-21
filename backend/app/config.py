@@ -2,10 +2,11 @@
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Annotated, Literal, get_args
+from urllib.parse import urlsplit
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 ClassName = Literal["glioma", "meningioma", "notumor", "pituitary"]
 
@@ -27,11 +28,26 @@ WARNING_CODES = (UNEXPECTED_IMAGE_SIZE, LOW_CONFIDENCE)
 # within MAX_PIXELS (16384x1024) would still need a 16384 x 16384 canvas.
 DEFAULT_MAX_IMAGE_SIDE = 4096
 
+# Host headers the API answers to: this machine, and "api", the service name in Compose.
+DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "api")
+# Pages that may send POST and DELETE: the Vite dev server (5173), `npm run preview`
+# (4173) and Swagger UI served by the API itself (8000).
+DEFAULT_ALLOWED_ORIGINS = tuple(
+    f"http://{host}:{port}" for port in (5173, 4173, 8000) for host in ("localhost", "127.0.0.1")
+)
+
+
+def comma_separated(value: object) -> object:
+    """'a, b' -> ['a', 'b'], so lists are written in .env without JSON brackets."""
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return value
+
 
 class Settings(BaseSettings):
     """Settings taken from MODEL_PATH, MODEL_VERSION, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS,
-    MAX_IMAGE_SIDE, MAX_CONCURRENT_INFERENCES, MAX_QUEUE, LOW_CONFIDENCE_THRESHOLD and
-    DATABASE_URL."""
+    MAX_IMAGE_SIDE, MAX_CONCURRENT_INFERENCES, MAX_QUEUE, LOW_CONFIDENCE_THRESHOLD,
+    DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS and ENABLE_DOCS."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -59,6 +75,47 @@ class Settings(BaseSettings):
     # postgresql+psycopg://user:password@localhost:5432/brain_mri.
     # Without it the service still predicts, but keeps no history.
     database_url: str | None = None
+    # Host headers to answer; others get 400. "*" allows any host.
+    allowed_hosts: Annotated[list[str], NoDecode] = Field(
+        default=list(DEFAULT_ALLOWED_HOSTS), min_length=1
+    )
+    # Origins (scheme://host[:port]) whose pages may send POST and DELETE; a request
+    # with any other Origin header gets 403. Requests without Origin are not browsers'.
+    allowed_origins: Annotated[list[str], NoDecode] = Field(
+        default=list(DEFAULT_ALLOWED_ORIGINS)
+    )
+    # Serve Swagger UI (/docs), ReDoc (/redoc) and the schema (/openapi.json).
+    enable_docs: bool = True
+
+    @field_validator("allowed_hosts", "allowed_origins", mode="before")
+    @classmethod
+    def _split_comma_separated(cls, value: object) -> object:
+        return comma_separated(value)
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def _normalise_hosts(cls, hosts: list[str]) -> list[str]:
+        return [host.lower() for host in hosts]
+
+    @field_validator("allowed_origins")
+    @classmethod
+    def _check_origins(cls, origins: list[str]) -> list[str]:
+        checked = []
+        for origin in origins:
+            parts = urlsplit(origin)
+            if (
+                parts.scheme not in ("http", "https")
+                or not parts.netloc
+                or parts.path not in ("", "/")
+                or parts.query
+                or parts.fragment
+            ):
+                raise ValueError(
+                    f"{origin!r} is not an origin: use scheme://host[:port], e.g. "
+                    "https://mri.example"
+                )
+            checked.append(f"{parts.scheme}://{parts.netloc}".lower())
+        return checked
 
     @property
     def max_upload_bytes(self) -> int:

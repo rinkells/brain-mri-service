@@ -161,7 +161,8 @@ export interface components {
         };
         /**
          * PredictionRecordResponse
-         * @description A saved prediction. The scan itself and its file name are never stored.
+         * @description A saved prediction. The scan itself and its file name are never stored, and the
+         *     SHA-256 of the file, which is stored, is never returned: it identifies the scan.
          */
         PredictionRecordResponse: {
             /**
@@ -187,11 +188,6 @@ export interface components {
             image_size: components["schemas"]["ImageSize"];
             /** Warnings */
             warnings: components["schemas"]["PredictionWarning"][];
-            /**
-             * Image Sha256
-             * @description SHA-256 завантаженого файлу (hex)
-             */
-            image_sha256: string;
             /**
              * Gradcam Requested
              * @description Чи запитували теплову карту

@@ -7,6 +7,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /srv
 
+# The base image ships pip 25.0.1, which has CVE-2025-8869; it is upgraded first, so
+# the fixed pip installs everything else. The base image has no setuptools, but torch
+# declares it a dependency and would pull in whatever version it resolves; it is
+# installed here beforehand at a version without CVE-2024-6345 and CVE-2025-47273.
+RUN pip install --upgrade pip==26.3 setuptools==84.2.1
+
 COPY requirements.txt .
 
 # PyTorch is installed from the CPU-only index first: the default Linux wheels

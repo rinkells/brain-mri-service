@@ -16,6 +16,9 @@ ENV_VARS = (
     "MAX_QUEUE",
     "LOW_CONFIDENCE_THRESHOLD",
     "DATABASE_URL",
+    "ALLOWED_HOSTS",
+    "ALLOWED_ORIGINS",
+    "ENABLE_DOCS",
 )
 
 
@@ -144,3 +147,57 @@ def test_invalid_inference_limits_are_rejected(monkeypatch, name, value):
 
     with pytest.raises(ValidationError):
         load_settings()
+
+
+def test_host_and_origin_defaults():
+    settings = load_settings()
+
+    assert settings.allowed_hosts == ["localhost", "127.0.0.1", "api"]
+    assert settings.allowed_origins == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
+
+
+def test_hosts_and_origins_are_comma_separated(monkeypatch):
+    monkeypatch.setenv("ALLOWED_HOSTS", "MRI.example, 10.0.0.5")
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://MRI.example/, http://10.0.0.5:8080")
+
+    settings = load_settings()
+
+    assert settings.allowed_hosts == ["mri.example", "10.0.0.5"]
+    assert settings.allowed_origins == ["https://mri.example", "http://10.0.0.5:8080"]
+
+
+def test_no_origins_means_no_browser_may_write(monkeypatch):
+    monkeypatch.setenv("ALLOWED_ORIGINS", "")
+
+    assert load_settings().allowed_origins == []
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("ALLOWED_HOSTS", ""),
+        ("ALLOWED_ORIGINS", "mri.example"),
+        ("ALLOWED_ORIGINS", "https://mri.example/app"),
+        ("ALLOWED_ORIGINS", "ftp://mri.example"),
+        ("ALLOWED_ORIGINS", "https://mri.example?x=1"),
+    ],
+)
+def test_invalid_hosts_and_origins_are_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError):
+        load_settings()
+
+
+def test_enable_docs(monkeypatch):
+    assert load_settings().enable_docs is True
+
+    monkeypatch.setenv("ENABLE_DOCS", "false")
+    assert load_settings().enable_docs is False

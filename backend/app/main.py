@@ -14,6 +14,7 @@ from sqlalchemy.exc import DataError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
@@ -46,6 +47,7 @@ from app.schemas import (
     PredictionResponse,
     PredictionWarning,
 )
+from app.security import OriginCheckMiddleware, SecurityHeadersMiddleware
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -321,18 +323,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if app.state.database is not None:
                 app.state.database.dispose()
 
+    # ENABLE_DOCS=false removes Swagger UI, ReDoc and the schema they are built from.
+    docs = settings.enable_docs
     app = FastAPI(
         title="Brain MRI classifier",
         description=DESCRIPTION,
         version=__version__,
         lifespan=lifespan,
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
     )
     app.state.settings = settings
+    # The middleware added last runs first: the Host is checked, then the Origin,
+    # and only then is the body read.
     app.add_middleware(
         MaxBodySizeMiddleware,
         max_bytes=settings.max_upload_bytes + MULTIPART_OVERHEAD_BYTES,
         detail=file_too_large_detail(settings),
     )
+    app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.allowed_origins)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
+    # Outermost, so the refusals of the checks above get the headers too.
+    app.add_middleware(SecurityHeadersMiddleware)
     # Only a database that cannot be reached is "unavailable" (503). A value the database
     # rejects is the client's mistake (422). Anything else is a bug and stays a 500.
     app.add_exception_handler(OperationalError, database_unavailable_handler)
