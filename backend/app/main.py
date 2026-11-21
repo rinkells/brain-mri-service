@@ -21,6 +21,7 @@ from app.config import (
     CLASS_NAMES,
     EXPECTED_IMAGE_SIZE,
     LOW_CONFIDENCE,
+    NOT_MRI_LIKE,
     UNEXPECTED_IMAGE_SIZE,
     Settings,
     get_settings,
@@ -30,6 +31,7 @@ from app.gradcam import encode_png_base64, overlay_heatmap
 from app.history import save_prediction
 from app.history_api import DATABASE_REJECTED_VALUE, DATABASE_UNAVAILABLE
 from app.history_api import router as history_router
+from app.input_check import ImageFeatures, NotMriThresholds, compute_features, looks_not_mri
 from app.limiter import InferenceLimiter, ServiceBusyError
 from app.model import BrainMRIClassifier, Prediction
 from app.preprocessing import (
@@ -135,6 +137,21 @@ def size_warning(width: int, height: int) -> PredictionWarning | None:
     return PredictionWarning(code=UNEXPECTED_IMAGE_SIZE, message=SIZE_WARNING_MESSAGE)
 
 
+NOT_MRI_LIKE_MESSAGE = (
+    "Зображення не схоже на знімок МРТ (кольорове, шумне або майже однорідне). "
+    "Результат не можна вважати достовірним."
+)
+
+
+def not_mri_warning(
+    features: ImageFeatures, thresholds: NotMriThresholds
+) -> PredictionWarning | None:
+    """A warning, not a refusal: the prediction is still returned."""
+    if not looks_not_mri(features, thresholds):
+        return None
+    return PredictionWarning(code=NOT_MRI_LIKE, message=NOT_MRI_LIKE_MESSAGE)
+
+
 def confidence_warning(probability: float, threshold: float) -> PredictionWarning | None:
     """Warn when the top-1 probability is below the threshold.
 
@@ -201,7 +218,9 @@ async def predict(
 
     prediction = analysis.prediction
     top_probability = prediction.probabilities[prediction.predicted_class]
+    # The most serious first: an image that is not a scan makes the rest beside the point.
     candidates = (
+        not_mri_warning(analysis.features, settings.not_mri_thresholds),
         size_warning(analysis.width, analysis.height),
         confidence_warning(top_probability, settings.low_confidence_threshold),
     )
@@ -244,6 +263,7 @@ class Analysis:
     height: int
     prediction: Prediction
     heatmap: str | None  # PNG in base64, only when Grad-CAM was asked for
+    features: ImageFeatures  # for the not_mri_like warning
 
 
 def analyse(
@@ -270,6 +290,7 @@ def analyse(
         height=image.height,
         prediction=prediction,
         heatmap=heatmap,
+        features=compute_features(image),
     )
 
 

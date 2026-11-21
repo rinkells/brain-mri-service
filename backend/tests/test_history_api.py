@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from PIL import Image
 from sqlalchemy import event, text
 from sqlalchemy.exc import DataError, OperationalError, ProgrammingError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
@@ -16,10 +17,15 @@ from app.database import Base, Database, create_db_engine
 from app.history import compute_stats
 from app.records import PredictionRecord
 from tests.conftest import MODEL_VERSION
-from tests.helpers import image_bytes, make_record
+from tests.helpers import encode_image, image_bytes, make_record
 
 UNREACHABLE_POSTGRES = "postgresql+psycopg://brain_mri:secret@127.0.0.1:1/brain_mri"
 BASE_TIME = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+
+
+def by_code(**counts: int) -> dict[str, int]:
+    """warnings_by_code of /stats: every known code is there, at 0 unless given."""
+    return {"unexpected_image_size": 0, "low_confidence": 0, "not_mri_like": 0, **counts}
 
 
 def post_scan(client, data=None, **params):
@@ -232,7 +238,7 @@ def test_stats_skip_damaged_warnings(history_client, database):
     # Only well-formed warnings count, the same ones the history shows.
     assert response.status_code == 200
     assert response.json()["total"] == 5
-    assert response.json()["warnings_by_code"] == {"unexpected_image_size": 2, "low_confidence": 0}
+    assert response.json()["warnings_by_code"] == by_code(unexpected_image_size=2)
 
 
 def test_filter_by_class(history_client, database):
@@ -411,7 +417,7 @@ def test_stats_of_empty_history(history_client):
         "by_class": {"glioma": 0, "meningioma": 0, "notumor": 0, "pituitary": 0},
         "with_warnings_share": None,
         "average_latency_ms": None,
-        "warnings_by_code": {"unexpected_image_size": 0, "low_confidence": 0},
+        "warnings_by_code": by_code(),
     }
 
 
@@ -424,7 +430,7 @@ def test_stats(history_client, database):
         "by_class": {"glioma": 2, "meningioma": 0, "notumor": 1, "pituitary": 1},
         "with_warnings_share": 0.5,
         "average_latency_ms": 25.0,
-        "warnings_by_code": {"unexpected_image_size": 2, "low_confidence": 0},
+        "warnings_by_code": by_code(unexpected_image_size=2),
     }
 
 
@@ -433,24 +439,24 @@ LOW_CONFIDENCE_WARNING = {"code": "low_confidence", "message": "Модель н�
 
 
 @pytest.mark.parametrize(
-    ("warnings", "by_code", "share"),
+    ("warnings", "expected", "share"),
     [
-        ([], {"unexpected_image_size": 0, "low_confidence": 0}, 0.0),
-        ([LOW_CONFIDENCE_WARNING], {"unexpected_image_size": 0, "low_confidence": 1}, 1.0),
+        ([], by_code(), 0.0),
+        ([LOW_CONFIDENCE_WARNING], by_code(low_confidence=1), 1.0),
         (
             [SIZE_WARNING, LOW_CONFIDENCE_WARNING],
-            {"unexpected_image_size": 1, "low_confidence": 1},
+            by_code(unexpected_image_size=1, low_confidence=1),
             1.0,
         ),
     ],
     ids=["no-warning", "one-code", "two-codes"],
 )
-def test_stats_count_warnings_by_code(history_client, database, warnings, by_code, share):
+def test_stats_count_warnings_by_code(history_client, database, warnings, expected, share):
     add_records(database, make_record(warnings=warnings))
 
     stats = history_client.get("/stats").json()
 
-    assert stats["warnings_by_code"] == by_code
+    assert stats["warnings_by_code"] == expected
     # The share still counts predictions with any warning, each of them once.
     assert stats["with_warnings_share"] == share
 
@@ -479,18 +485,16 @@ def test_stats_with_mixed_warnings_keep_the_old_fields(history_client, database)
         "with_warnings_share": 0.75,
         "average_latency_ms": 25.0,
     }
-    assert stats["warnings_by_code"] == {"unexpected_image_size": 2, "low_confidence": 2}
+    assert stats["warnings_by_code"] == by_code(unexpected_image_size=2, low_confidence=2)
 
 
 def test_stats_count_codes_they_do_not_know(history_client, database):
     future = {"code": "some_future_warning", "message": "Нове попередження."}
     add_records(database, make_record(warnings=[future, SIZE_WARNING]))
 
-    assert history_client.get("/stats").json()["warnings_by_code"] == {
-        "unexpected_image_size": 1,
-        "low_confidence": 0,
-        "some_future_warning": 1,
-    }
+    assert history_client.get("/stats").json()["warnings_by_code"] == by_code(
+        unexpected_image_size=1, some_future_warning=1
+    )
 
 
 def test_stats_add_up_while_predictions_are_being_saved(use_database, tmp_path):
@@ -558,14 +562,48 @@ def test_stats_follow_new_predictions_and_deletes(history_client):
     stats = history_client.get("/stats").json()
     assert stats["total"] == 2
     assert stats["with_warnings_share"] == 0.5
-    assert stats["warnings_by_code"] == {"unexpected_image_size": 1, "low_confidence": 0}
+    assert stats["warnings_by_code"] == by_code(unexpected_image_size=1)
 
     history_client.delete(f"/predictions/{created['id']}")
 
     stats = history_client.get("/stats").json()
     assert stats["total"] == 1
     assert stats["with_warnings_share"] == 0.0
-    assert stats["warnings_by_code"] == {"unexpected_image_size": 0, "low_confidence": 0}
+    assert stats["warnings_by_code"] == by_code()
+
+
+
+def test_not_mri_like_prediction_is_saved_and_counted(history_client, database):
+    grey = encode_image(Image.new("RGB", (512, 512), (128, 128, 128)))
+
+    body = post_scan(history_client, grey).json()
+
+    assert "not_mri_like" in [warning["code"] for warning in body["warnings"]]
+    with database.session() as session:
+        record = session.get(PredictionRecord, uuid.UUID(body["id"]))
+    assert record.warnings == body["warnings"]
+    stats = history_client.get("/stats").json()
+    assert stats["warnings_by_code"]["not_mri_like"] == 1
+    assert stats["with_warnings_share"] == 1.0
+
+
+def test_records_saved_before_not_mri_like_are_shown_as_they_are(history_client, database):
+    """Older records are not checked again (the scan is not kept): no new warning appears."""
+    plain, sized = add_records(
+        database, make_record(warnings=[]), make_record(warnings=[SIZE_WARNING])
+    )
+
+    items = history_client.get("/predictions").json()["items"]
+    single = history_client.get(f"/predictions/{plain}").json()
+
+    assert {item["id"]: item["warnings"] for item in items} == {
+        str(plain): [],
+        str(sized): [SIZE_WARNING],
+    }
+    assert single["warnings"] == []
+    assert history_client.get("/stats").json()["warnings_by_code"] == by_code(
+        unexpected_image_size=1
+    )
 
 
 # --- Database unavailable or not configured ------------------------------------

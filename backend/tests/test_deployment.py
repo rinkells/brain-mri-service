@@ -90,3 +90,25 @@ def test_app_dependency_pins_are_left_alone():
 
     assert "pip" not in requirements.split()
     assert "setuptools" not in requirements
+
+
+NOT_MRI_DEFAULTS = {
+    "NOT_MRI_COLOR_MAX": "7",
+    "NOT_MRI_NOISE_MAX": "0.85",
+    "NOT_MRI_STD_MIN": "10",
+    "NOT_MRI_LOWCONTRAST_STD": "30",
+    "NOT_MRI_DARK_MIN": "0.15",
+}
+
+
+def test_not_mri_thresholds_reach_the_api(services):
+    environment = services["api"]["environment"]
+
+    assert {name: environment[name] for name in NOT_MRI_DEFAULTS} == NOT_MRI_DEFAULTS
+
+
+@pytest.mark.parametrize("path", [".env.example", "backend/.env.example"])
+def test_example_env_files_list_the_not_mri_thresholds(path):
+    lines = (REPO_DIR / path).read_text(encoding="utf-8").splitlines()
+
+    assert {f"{name}={value}" for name, value in NOT_MRI_DEFAULTS.items()} <= set(lines)

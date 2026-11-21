@@ -225,6 +225,89 @@ def test_threshold_is_taken_from_settings(with_top_probability, settings):
     assert post_image(client, image_bytes(512, 512)).json()["warnings"] == []
 
 
+# --- Not MRI-like warning ------------------------------------------------------
+
+NOT_MRI_LIKE = {
+    "code": "not_mri_like",
+    "message": "Зображення не схоже на знімок МРТ (кольорове, шумне або майже однорідне). "
+    "Результат не можна вважати достовірним.",
+}
+
+
+def noise_png(width: int = 512, height: int = 512) -> bytes:
+    pixels = np.random.default_rng(0).integers(0, 256, (height, width, 3), dtype=np.uint8)
+    return encode_image(Image.fromarray(pixels))
+
+
+def solid_png(value: int) -> bytes:
+    return encode_image(Image.new("RGB", (512, 512), (value, value, value)))
+
+
+def tinted_scan_png() -> bytes:
+    """The scan-like test image in orange: colour is the only thing wrong with it."""
+    scan = np.asarray(make_image(512, 512), dtype=np.float64)
+    tinted = np.dstack([scan, scan * 0.6, scan * 0.3]).astype(np.uint8)
+    return encode_image(Image.fromarray(tinted))
+
+
+def codes(response) -> list[str]:
+    return [warning["code"] for warning in response.json()["warnings"]]
+
+
+def test_noise_gets_not_mri_like_but_the_prediction_is_returned(with_top_probability):
+    response = post_image(with_top_probability(0.99), noise_png())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["warnings"] == [NOT_MRI_LIKE]
+    # A warning, not a refusal: the prediction is there as always.
+    assert body["predicted_class"] == "glioma"
+    assert body["probabilities"]["glioma"] == 0.99
+    assert body["image_size"] == {"width": 512, "height": 512}
+    assert body["model_version"] == MODEL_VERSION
+
+
+@pytest.mark.parametrize(
+    "data",
+    [solid_png(0), solid_png(255), solid_png(128), noise_png(), tinted_scan_png()],
+    ids=["black", "white", "grey", "noise", "colour"],
+)
+def test_non_scans_get_not_mri_like(client, data):
+    response = post_image(client, data)
+
+    assert response.status_code == 200
+    assert "not_mri_like" in codes(response)
+
+
+@pytest.mark.parametrize("size", [(512, 512), (640, 480)])
+def test_scan_does_not_get_not_mri_like(client, size):
+    response = post_image(client, image_bytes(*size))
+
+    assert response.status_code == 200
+    assert "not_mri_like" not in codes(response)
+
+
+def test_not_mri_like_comes_first_among_the_warnings(with_top_probability):
+    response = post_image(with_top_probability(0.5), noise_png(640, 480))
+
+    assert codes(response) == ["not_mri_like", "unexpected_image_size", "low_confidence"]
+
+
+def test_not_mri_thresholds_are_taken_from_settings(with_top_probability, settings):
+    client = with_top_probability(0.99)
+    client.app.state.settings = settings.model_copy(
+        update={
+            "not_mri_color_max": 255,
+            "not_mri_noise_max": 10,
+            "not_mri_std_min": 0,
+            "not_mri_lowcontrast_std": 0,
+        }
+    )
+
+    assert post_image(client, noise_png()).json()["warnings"] == []
+    assert post_image(client, solid_png(0)).json()["warnings"] == []
+
+
 # --- 400: not an image ---------------------------------------------------------
 
 

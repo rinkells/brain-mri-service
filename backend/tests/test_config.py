@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.config import CLASS_NAMES, EXPECTED_IMAGE_SIZE, Settings
+from app.input_check import NotMriThresholds
 
 ENV_VARS = (
     "MODEL_PATH",
@@ -19,6 +20,11 @@ ENV_VARS = (
     "ALLOWED_HOSTS",
     "ALLOWED_ORIGINS",
     "ENABLE_DOCS",
+    "NOT_MRI_COLOR_MAX",
+    "NOT_MRI_NOISE_MAX",
+    "NOT_MRI_STD_MIN",
+    "NOT_MRI_LOWCONTRAST_STD",
+    "NOT_MRI_DARK_MIN",
 )
 
 
@@ -201,3 +207,46 @@ def test_enable_docs(monkeypatch):
 
     monkeypatch.setenv("ENABLE_DOCS", "false")
     assert load_settings().enable_docs is False
+
+
+# --- not_mri_like thresholds ----------------------------------------------------
+
+
+def test_not_mri_thresholds_default_to_the_measured_values():
+    assert load_settings().not_mri_thresholds == NotMriThresholds(
+        color_max=7.0, noise_max=0.85, std_min=10.0, lowcontrast_std=30.0, dark_min=0.15
+    )
+
+
+def test_not_mri_thresholds_are_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("NOT_MRI_COLOR_MAX", "12.5")
+    monkeypatch.setenv("NOT_MRI_NOISE_MAX", "0.9")
+    monkeypatch.setenv("NOT_MRI_STD_MIN", "5")
+    monkeypatch.setenv("NOT_MRI_LOWCONTRAST_STD", "25")
+    monkeypatch.setenv("NOT_MRI_DARK_MIN", "0.2")
+
+    assert load_settings().not_mri_thresholds == NotMriThresholds(
+        color_max=12.5, noise_max=0.9, std_min=5.0, lowcontrast_std=25.0, dark_min=0.2
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("NOT_MRI_COLOR_MAX", "-1"),
+        ("NOT_MRI_COLOR_MAX", "256"),
+        ("NOT_MRI_NOISE_MAX", "-0.1"),
+        ("NOT_MRI_STD_MIN", "-1"),
+        ("NOT_MRI_STD_MIN", "256"),
+        ("NOT_MRI_LOWCONTRAST_STD", "-1"),
+        ("NOT_MRI_LOWCONTRAST_STD", "256"),
+        ("NOT_MRI_DARK_MIN", "-0.1"),
+        ("NOT_MRI_DARK_MIN", "1.5"),
+        ("NOT_MRI_DARK_MIN", "some"),
+    ],
+)
+def test_invalid_not_mri_thresholds_are_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError):
+        load_settings()

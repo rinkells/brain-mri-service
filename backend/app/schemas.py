@@ -22,7 +22,12 @@ class ImageSize(BaseModel):
 
 
 class PredictionWarning(BaseModel):
-    code: str = Field(description="Сталий ідентифікатор попередження для програмної обробки")
+    code: str = Field(
+        description=(
+            "Сталий ідентифікатор попередження для програмної обробки: unexpected_image_size, "
+            "low_confidence або not_mri_like"
+        )
+    )
     message: str = Field(description="Пояснення для людини")
 
 
