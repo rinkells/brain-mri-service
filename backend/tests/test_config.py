@@ -176,7 +176,8 @@ def test_hosts_and_origins_are_comma_separated(monkeypatch):
 
     settings = load_settings()
 
-    assert settings.allowed_hosts == ["mri.example", "10.0.0.5"]
+    # localhost and 127.0.0.1 are always added: the container healthcheck uses them.
+    assert settings.allowed_hosts == ["mri.example", "10.0.0.5", "localhost", "127.0.0.1"]
     assert settings.allowed_origins == ["https://mri.example", "http://10.0.0.5:8080"]
 
 
@@ -276,3 +277,17 @@ def test_std_thresholds_reach_the_largest_possible_std(monkeypatch):
     thresholds = load_settings().not_mri_thresholds
 
     assert (thresholds.std_min, thresholds.lowcontrast_std) == (127.5, 127.5)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("127.0.0.1", ["127.0.0.1", "localhost"]),
+        ("LOCALHOST,api", ["localhost", "api", "127.0.0.1"]),
+        ("*", ["*"]),
+    ],
+)
+def test_local_hosts_are_always_allowed(monkeypatch, value, expected):
+    monkeypatch.setenv("ALLOWED_HOSTS", value)
+
+    assert load_settings().allowed_hosts == expected

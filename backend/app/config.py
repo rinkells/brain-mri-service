@@ -38,6 +38,10 @@ DEFAULT_MAX_IMAGE_SIDE = 4096
 
 # Host headers the API answers to: this machine, and "api", the service name in Compose.
 DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "api")
+# Always allowed, whatever ALLOWED_HOSTS says: the container healthcheck asks 127.0.0.1.
+# This does not weaken the DNS rebinding check: a rebinding attack arrives with the
+# attacker's host name in the Host header, never with these.
+LOCAL_HOSTS = ("localhost", "127.0.0.1")
 # Pages that may send POST and DELETE: the Vite dev server (5173), `npm run preview`
 # (4173) and Swagger UI served by the API itself (8000).
 DEFAULT_ALLOWED_ORIGINS = tuple(
@@ -99,7 +103,7 @@ class Settings(BaseSettings):
     # postgresql+psycopg://user:password@localhost:5432/brain_mri.
     # Without it the service still predicts, but keeps no history.
     database_url: str | None = None
-    # Host headers to answer; others get 400. "*" allows any host.
+    # Host headers to answer; others get 400. "*" allows any host. LOCAL_HOSTS are added.
     allowed_hosts: Annotated[list[str], NoDecode] = Field(
         default=list(DEFAULT_ALLOWED_HOSTS), min_length=1
     )
@@ -119,7 +123,10 @@ class Settings(BaseSettings):
     @field_validator("allowed_hosts")
     @classmethod
     def _normalise_hosts(cls, hosts: list[str]) -> list[str]:
-        return [host.lower() for host in hosts]
+        hosts = [host.lower() for host in hosts]
+        if "*" in hosts:
+            return hosts
+        return hosts + [host for host in LOCAL_HOSTS if host not in hosts]
 
     @field_validator("allowed_origins")
     @classmethod
