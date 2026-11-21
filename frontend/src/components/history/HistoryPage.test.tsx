@@ -20,7 +20,7 @@ const EMPTY_STATS = makeStats({
   by_class: { glioma: 0, meningioma: 0, notumor: 0, pituitary: 0 },
   with_warnings_share: null,
   average_latency_ms: null,
-  warnings_by_code: { unexpected_image_size: 0, low_confidence: 0 },
+  warnings_by_code: { unexpected_image_size: 0, low_confidence: 0, not_mri_like: 0 },
 })
 
 /** A fake history of `total` records served page by page, newest first. */
@@ -93,9 +93,10 @@ describe('statistics', () => {
     render(<HistoryPage />)
 
     expect((await screen.findByText('Усього прогнозів')).closest('div')).toHaveTextContent('0')
-    // Two cards and the two warning types.
-    expect(screen.getAllByText('—')).toHaveLength(4)
+    // Two cards and the three warning types.
+    expect(screen.getAllByText('—')).toHaveLength(5)
     expect(screen.getByText('Низька впевненість').closest('div')).toHaveTextContent('—')
+    expect(screen.getByText('Не схоже на МРТ').closest('div')).toHaveTextContent('—')
   })
 
   test('splits warnings by type and labels the overall share as any warning', async () => {
@@ -124,6 +125,24 @@ describe('statistics', () => {
     )
   })
 
+  test('counts images that do not look like an MRI scan in a row of their own', async () => {
+    mockApi({
+      predictions: () => jsonResponse(makePage([])),
+      stats: () =>
+        jsonResponse(
+          makeStats({
+            total: 8,
+            warnings_by_code: { low_confidence: 2, unexpected_image_size: 6, not_mri_like: 1 },
+          }),
+        ),
+    })
+
+    render(<HistoryPage />)
+
+    const row = (await screen.findByText('Не схоже на МРТ')).closest('div')
+    expect(row).toHaveTextContent(`${formatPercent(0.125)} (1)`)
+  })
+
   test('treats a warning code missing from the response as zero', async () => {
     mockApi({
       predictions: () => jsonResponse(makePage([])),
@@ -134,6 +153,9 @@ describe('statistics', () => {
 
     const row = (await screen.findByText('Низька впевненість')).closest('div')
     expect(row).toHaveTextContent(`${formatPercent(0)} (0)`)
+    // A server older than not_mri_like does not send the code at all.
+    const notMri = screen.getByText('Не схоже на МРТ').closest('div')
+    expect(notMri).toHaveTextContent(`${formatPercent(0)} (0)`)
   })
 })
 
@@ -209,6 +231,24 @@ describe('table', () => {
 
     expect(yellow(none)).not.toBeInTheDocument()
     expect(none).toHaveTextContent('Ні')
+  })
+
+  test('marks images that do not look like an MRI scan with a yellow badge', async () => {
+    const notMri = {
+      code: 'not_mri_like',
+      message: 'Зображення не схоже на знімок МРТ (кольорове, шумне або майже однорідне).',
+    }
+    mockApi({
+      predictions: () => jsonResponse(makePage([makeRecord(1, { warnings: [notMri] })])),
+      stats: () => jsonResponse(makeStats()),
+    })
+
+    render(<HistoryPage />)
+
+    const badge = await screen.findByText('Не схоже на МРТ', { selector: 'td span' })
+    expect(badge).toHaveClass('bg-amber-100')
+    expect(badge).toHaveAttribute('title', notMri.message)
+    expect(screen.queryByText('Інше')).not.toBeInTheDocument()
   })
 
   test('shows warnings the interface does not know in yellow', async () => {

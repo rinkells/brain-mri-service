@@ -10,8 +10,9 @@ function messages(warnings: PredictionWarning[]) {
 }
 
 /**
- * Warnings of a saved prediction. Yellow is kept for low confidence (and codes the
- * interface does not know yet); the common image size warning is a grey mark.
+ * Warnings of a saved prediction. Yellow is kept for an image that is not MRI-like, low
+ * confidence and codes the interface does not know yet; the common image size warning is
+ * a grey mark.
  * The full message is in the tooltip.
  */
 export function WarningMarks({ warnings }: { warnings: PredictionWarning[] }) {
@@ -19,10 +20,15 @@ export function WarningMarks({ warnings }: { warnings: PredictionWarning[] }) {
     return <span className="text-slate-500 dark:text-slate-400">Ні</span>
   }
 
-  const { lowConfidence, imageSize, other } = groupWarnings(warnings)
+  const { notMriLike, lowConfidence, imageSize, other } = groupWarnings(warnings)
 
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
+      {notMriLike && (
+        <span title={notMriLike.message} className={yellowBadge}>
+          Не схоже на МРТ
+        </span>
+      )}
       {lowConfidence && (
         <span title={lowConfidence.message} className={yellowBadge}>
           Низька впевненість
