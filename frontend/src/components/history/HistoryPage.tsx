@@ -32,6 +32,12 @@ export function HistoryPage() {
     setDeleteError(null)
   }
 
+  function changePage(next: number) {
+    setOffset(next)
+    // An error about a record on the previous page would be out of place here.
+    setDeleteError(null)
+  }
+
   async function handleDelete(id: string) {
     setDeleteError(null)
     let deleted = false
@@ -103,7 +109,7 @@ export function HistoryPage() {
             offset={offset}
             limit={HISTORY_PAGE_SIZE}
             disabled={history.loading}
-            onChange={setOffset}
+            onChange={changePage}
           />
         )}
       </section>

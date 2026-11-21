@@ -466,6 +466,26 @@ describe('deleting a record', () => {
     expect(screen.queryByText('Показано 1–10 з 11')).not.toBeInTheDocument()
   })
 
+  test('a delete error goes away on another page', async () => {
+    const records = newestFirst(11)
+    const { user } = setup(records, 404)
+    render(<HistoryPage />)
+    await screen.findByText('Показано 1–10 з 11')
+
+    await user.click(
+      screen.getByRole('button', {
+        name: `Видалити запис від ${formatDateTime(records[0].created_at)}`,
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Так' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Запис не знайдено')
+
+    await user.click(screen.getByRole('button', { name: 'Наступна' }))
+
+    expect(await screen.findByText('Показано 11–11 з 11')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   test('a record that is already gone is reported and the list is refreshed', async () => {
     const records = newestFirst(1)
     const { fetchMock, user } = setup(records, 404)
