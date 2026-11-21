@@ -177,6 +177,71 @@ describe('history requests', () => {
   })
 })
 
+describe('refusals of the Host and Origin checks', () => {
+  // What Starlette's TrustedHostMiddleware sends: plain text, not JSON.
+  const hostRefusal = () => new Response('Invalid host header', { status: 400 })
+  const originRefusal = () =>
+    jsonResponse(
+      {
+        detail:
+          'Запити з цього джерела (Origin) заборонено. Дозволені джерела задає ALLOWED_ORIGINS.',
+      },
+      403,
+    )
+
+  test('a 400 for the host is not taken for a broken image', async () => {
+    stubFetch(hostRefusal)
+
+    const error = await captureError(predict(makeFile(), { gradcam: false }))
+
+    expect(error.kind).toBe('host-not-allowed')
+    expect(error.status).toBe(400)
+  })
+
+  test('the history gets the same host refusal', async () => {
+    stubFetch(hostRefusal)
+
+    expect((await captureError(listPredictions({ limit: 10, offset: 0 }))).kind).toBe(
+      'host-not-allowed',
+    )
+  })
+
+  test('a 400 with a JSON detail is still about the image', async () => {
+    stubFetch(() => jsonResponse({ detail: 'Файл не є зображенням.' }, 400))
+
+    const error = await captureError(predict(makeFile(), { gradcam: false }))
+
+    expect(error.kind).toBe('invalid-image')
+    expect(error.detail).toBe('Файл не є зображенням.')
+  })
+
+  test.each([
+    ['predict', () => predict(makeFile(), { gradcam: false })],
+    ['delete', () => deletePrediction('6f1c2a3e-0000-4000-8000-000000000001')],
+  ])('a 403 from %s is the origin check', async (_, request) => {
+    stubFetch(originRefusal)
+
+    const error = await captureError(request())
+
+    expect(error.kind).toBe('origin-not-allowed')
+    expect(error.status).toBe(403)
+  })
+
+  test('each has its own explanation that points at the setting', () => {
+    const host = describeError(new ApiError('host-not-allowed', { status: 400 }))
+    const origin = describeError(new ApiError('origin-not-allowed', { status: 403 }))
+
+    expect(host.title).toBe('Адресу сервера не дозволено')
+    expect(host.description).toContain('ALLOWED_HOSTS')
+    expect(origin.title).toBe('Цій сторінці заборонено надсилати запити')
+    expect(origin.description).toContain('ALLOWED_ORIGINS')
+    for (const { description } of [host, origin]) {
+      expect(description).not.toContain('пошкоджений')
+      expect(description).not.toContain('Спробуйте ще раз')
+    }
+  })
+})
+
 describe('describeError', () => {
   test('prefers the server detail', () => {
     expect(
@@ -190,6 +255,8 @@ describe('describeError', () => {
   test('has a fallback text for every kind', () => {
     const kinds = [
       'invalid-image',
+      'host-not-allowed',
+      'origin-not-allowed',
       'too-large',
       'unsupported-format',
       'validation',

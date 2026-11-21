@@ -9,6 +9,8 @@ import type {
 
 const KIND_BY_STATUS: Partial<Record<number, ApiErrorKind>> = {
   400: 'invalid-image',
+  // Only the origin check answers 403.
+  403: 'origin-not-allowed',
   404: 'not-found',
   413: 'too-large',
   415: 'unsupported-format',
@@ -20,16 +22,22 @@ const KIND_BY_STATUS: Partial<Record<number, ApiErrorKind>> = {
   504: 'unavailable',
 }
 
-async function readDetail(response: Response): Promise<string | undefined> {
+// Starlette's TrustedHostMiddleware answers a Host outside ALLOWED_HOSTS with this
+// plain text and status 400, the status /predict uses for a broken image.
+const HOST_REFUSAL = 'Invalid host header'
+
+async function readBody(response: Response): Promise<{ text: string; detail?: string }> {
+  let text = ''
   try {
-    const body: unknown = await response.json()
+    text = await response.text()
+    const body: unknown = JSON.parse(text)
     if (body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string') {
-      return body.detail
+      return { text, detail: body.detail }
     }
   } catch {
-    // Not JSON (e.g. a proxy error page): there is no detail to show.
+    // Not JSON (e.g. a proxy error page or the host refusal): there is no detail to show.
   }
-  return undefined
+  return { text }
 }
 
 /** /predict answers 503 when too many scans are already being analysed. */
@@ -54,10 +62,10 @@ async function send(
   }
 
   if (!response.ok) {
-    throw new ApiError(kindByStatus[response.status] ?? 'server', {
-      status: response.status,
-      detail: await readDetail(response),
-    })
+    const { text, detail } = await readBody(response)
+    const refusedHost = response.status === 400 && text.trim() === HOST_REFUSAL
+    const kind = refusedHost ? 'host-not-allowed' : (kindByStatus[response.status] ?? 'server')
+    throw new ApiError(kind, { status: response.status, detail })
   }
   return response
 }
