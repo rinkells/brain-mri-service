@@ -19,12 +19,16 @@ const smallButton =
 export function HistoryTable({ items, loading, emptyText, onDelete }: HistoryTableProps) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  // The row just deleted, and the list it was deleted from. The list is reloaded after a
+  // delete; until the new one arrives, the old row is still shown and must stay inactive.
+  const [deleted, setDeleted] = useState<{ id: string; from: PredictionRecord[] } | null>(null)
 
   async function confirmDelete(id: string) {
     setDeletingId(id)
     try {
       await onDelete(id)
     } finally {
+      setDeleted({ id, from: items })
       setDeletingId(null)
       setConfirmingId(null)
     }
@@ -69,7 +73,8 @@ export function HistoryTable({ items, loading, emptyText, onDelete }: HistoryTab
             items.map((item) => {
               const time = formatDateTime(item.created_at)
               const confidence = item.probabilities[item.predicted_class] ?? 0
-              const busy = deletingId === item.id
+              const busy =
+                deletingId === item.id || (deleted?.id === item.id && deleted.from === items)
               return (
                 <tr key={item.id}>
                   <td className={`${cell} tabular-nums`}>
@@ -113,6 +118,7 @@ export function HistoryTable({ items, loading, emptyText, onDelete }: HistoryTab
                       <button
                         type="button"
                         aria-label={`Видалити запис від ${time}`}
+                        disabled={busy}
                         onClick={() => setConfirmingId(item.id)}
                         className={`${smallButton} text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40`}
                       >

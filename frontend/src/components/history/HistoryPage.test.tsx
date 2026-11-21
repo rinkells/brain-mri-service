@@ -450,6 +450,44 @@ describe('deleting a record', () => {
     expect(await screen.findByText('Показано 1–10 з 10')).toBeInTheDocument()
   })
 
+  test('the deleted row cannot be deleted again while the list reloads', async () => {
+    const records = newestFirst(2)
+    const history = serveHistory(records)
+    let holdList = false
+    let releaseList = () => {}
+    mockApi({
+      predictions: async (url) => {
+        if (holdList) {
+          await new Promise<void>((resolve) => (releaseList = resolve))
+        }
+        return history.handler(url)
+      },
+      stats: () => jsonResponse(makeStats()),
+      deletePrediction: (url) => {
+        history.remove(url.split('/').at(-1)!)
+        return new Response(null, { status: 204 })
+      },
+    })
+    const user = userEvent.setup()
+    render(<HistoryPage />)
+    await screen.findByText('Показано 1–2 з 2')
+    const name = `Видалити запис від ${formatDateTime(records[0].created_at)}`
+
+    holdList = true
+    await user.click(screen.getByRole('button', { name }))
+    await user.click(screen.getByRole('button', { name: 'Так' }))
+
+    // The DELETE is done, the new list is not here yet: the old row is still shown.
+    await waitFor(() => expect(screen.getByRole('button', { name })).toBeDisabled())
+    const other = `Видалити запис від ${formatDateTime(records[1].created_at)}`
+    expect(screen.getByRole('button', { name: other })).toBeEnabled()
+
+    holdList = false
+    releaseList()
+    expect(await screen.findByText('Показано 1–1 з 1')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+  })
+
   test('a failed delete stays on the page of the record', async () => {
     const records = newestFirst(11)
     const { user } = setup(records, 503)
