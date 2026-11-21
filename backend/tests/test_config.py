@@ -250,8 +250,11 @@ def test_not_mri_thresholds_are_read_from_the_environment(monkeypatch):
         ("NOT_MRI_NOISE_MAX", "-0.1"),
         ("NOT_MRI_STD_MIN", "-1"),
         ("NOT_MRI_STD_MIN", "256"),
+        # The brightness std of 0..255 values is at most 127.5: more would flag every scan.
+        ("NOT_MRI_STD_MIN", "128"),
         ("NOT_MRI_LOWCONTRAST_STD", "-1"),
         ("NOT_MRI_LOWCONTRAST_STD", "256"),
+        ("NOT_MRI_LOWCONTRAST_STD", "128"),
         ("NOT_MRI_DARK_MIN", "-0.1"),
         ("NOT_MRI_DARK_MIN", "1.5"),
         ("NOT_MRI_DARK_MIN", "some"),
@@ -264,3 +267,12 @@ def test_invalid_not_mri_thresholds_are_rejected(monkeypatch, name, value):
 
     with pytest.raises(ValidationError):
         load_settings()
+
+
+def test_std_thresholds_reach_the_largest_possible_std(monkeypatch):
+    monkeypatch.setenv("NOT_MRI_STD_MIN", "127.5")
+    monkeypatch.setenv("NOT_MRI_LOWCONTRAST_STD", "127.5")
+
+    thresholds = load_settings().not_mri_thresholds
+
+    assert (thresholds.std_min, thresholds.lowcontrast_std) == (127.5, 127.5)

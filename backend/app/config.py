@@ -11,6 +11,8 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from app.input_check import NotMriThresholds
 
 _NOT_MRI_DEFAULTS = NotMriThresholds()
+# Largest possible standard deviation of brightness values from 0 to 255.
+MAX_STD = 127.5
 
 ClassName = Literal["glioma", "meningioma", "notumor", "pituitary"]
 
@@ -84,9 +86,11 @@ class Settings(BaseSettings):
     # or std < NOT_MRI_LOWCONTRAST_STD together with a dark share < NOT_MRI_DARK_MIN.
     not_mri_color_max: float = Field(default=_NOT_MRI_DEFAULTS.color_max, ge=0, le=255)
     not_mri_noise_max: float = Field(default=_NOT_MRI_DEFAULTS.noise_max, ge=0)
-    not_mri_std_min: float = Field(default=_NOT_MRI_DEFAULTS.std_min, ge=0, le=255)
+    # The std of brightness values from 0 to 255 is at most 127.5, so a higher threshold
+    # would flag every scan.
+    not_mri_std_min: float = Field(default=_NOT_MRI_DEFAULTS.std_min, ge=0, le=MAX_STD)
     not_mri_lowcontrast_std: float = Field(
-        default=_NOT_MRI_DEFAULTS.lowcontrast_std, ge=0, le=255
+        default=_NOT_MRI_DEFAULTS.lowcontrast_std, ge=0, le=MAX_STD
     )
     not_mri_dark_min: float = Field(default=_NOT_MRI_DEFAULTS.dark_min, ge=0, le=1)
     # ... or when the share of fully opaque pixels is below NOT_MRI_OPAQUE_MIN.
