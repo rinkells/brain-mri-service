@@ -3,7 +3,7 @@
 import logging
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated
 
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
@@ -291,7 +291,9 @@ def analyse(
         height=image.height,
         prediction=prediction,
         heatmap=heatmap,
-        features=compute_features(image, grey=decoded.grey),
+        features=replace(
+            compute_features(image, grey=decoded.grey), opaque_share=decoded.opaque_share
+        ),
     )
 
 

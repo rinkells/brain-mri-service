@@ -54,7 +54,8 @@ class Settings(BaseSettings):
     """Settings taken from MODEL_PATH, MODEL_VERSION, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS,
     MAX_IMAGE_SIDE, MAX_CONCURRENT_INFERENCES, MAX_QUEUE, LOW_CONFIDENCE_THRESHOLD,
     NOT_MRI_COLOR_MAX, NOT_MRI_NOISE_MAX, NOT_MRI_STD_MIN, NOT_MRI_LOWCONTRAST_STD,
-    NOT_MRI_DARK_MIN, DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS and ENABLE_DOCS."""
+    NOT_MRI_DARK_MIN, NOT_MRI_OPAQUE_MIN, DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS and
+    ENABLE_DOCS."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -88,6 +89,8 @@ class Settings(BaseSettings):
         default=_NOT_MRI_DEFAULTS.lowcontrast_std, ge=0, le=255
     )
     not_mri_dark_min: float = Field(default=_NOT_MRI_DEFAULTS.dark_min, ge=0, le=1)
+    # ... or when the share of fully opaque pixels is below NOT_MRI_OPAQUE_MIN.
+    not_mri_opaque_min: float = Field(default=_NOT_MRI_DEFAULTS.opaque_min, ge=0, le=1)
     # SQLAlchemy URL of the prediction history, e.g.
     # postgresql+psycopg://user:password@localhost:5432/brain_mri.
     # Without it the service still predicts, but keeps no history.
@@ -146,6 +149,7 @@ class Settings(BaseSettings):
             std_min=self.not_mri_std_min,
             lowcontrast_std=self.not_mri_lowcontrast_std,
             dark_min=self.not_mri_dark_min,
+            opaque_min=self.not_mri_opaque_min,
         )
 
 

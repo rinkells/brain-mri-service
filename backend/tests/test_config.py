@@ -25,6 +25,7 @@ ENV_VARS = (
     "NOT_MRI_STD_MIN",
     "NOT_MRI_LOWCONTRAST_STD",
     "NOT_MRI_DARK_MIN",
+    "NOT_MRI_OPAQUE_MIN",
 )
 
 
@@ -214,7 +215,12 @@ def test_enable_docs(monkeypatch):
 
 def test_not_mri_thresholds_default_to_the_measured_values():
     assert load_settings().not_mri_thresholds == NotMriThresholds(
-        color_max=7.0, noise_max=0.85, std_min=10.0, lowcontrast_std=30.0, dark_min=0.15
+        color_max=7.0,
+        noise_max=0.85,
+        std_min=10.0,
+        lowcontrast_std=30.0,
+        dark_min=0.15,
+        opaque_min=0.99,
     )
 
 
@@ -224,9 +230,15 @@ def test_not_mri_thresholds_are_read_from_the_environment(monkeypatch):
     monkeypatch.setenv("NOT_MRI_STD_MIN", "5")
     monkeypatch.setenv("NOT_MRI_LOWCONTRAST_STD", "25")
     monkeypatch.setenv("NOT_MRI_DARK_MIN", "0.2")
+    monkeypatch.setenv("NOT_MRI_OPAQUE_MIN", "0.95")
 
     assert load_settings().not_mri_thresholds == NotMriThresholds(
-        color_max=12.5, noise_max=0.9, std_min=5.0, lowcontrast_std=25.0, dark_min=0.2
+        color_max=12.5,
+        noise_max=0.9,
+        std_min=5.0,
+        lowcontrast_std=25.0,
+        dark_min=0.2,
+        opaque_min=0.95,
     )
 
 
@@ -243,6 +255,8 @@ def test_not_mri_thresholds_are_read_from_the_environment(monkeypatch):
         ("NOT_MRI_DARK_MIN", "-0.1"),
         ("NOT_MRI_DARK_MIN", "1.5"),
         ("NOT_MRI_DARK_MIN", "some"),
+        ("NOT_MRI_OPAQUE_MIN", "-0.1"),
+        ("NOT_MRI_OPAQUE_MIN", "1.5"),
     ],
 )
 def test_invalid_not_mri_thresholds_are_rejected(monkeypatch, name, value):

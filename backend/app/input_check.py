@@ -36,6 +36,9 @@ class ImageFeatures:
     noise: float | None
     # Share of pixels darker than DARK_LEVEL, 0..1.
     dark_share: float
+    # Share of fully opaque pixels (alpha 255), from the decoder: the RGB image has no
+    # alpha left. Transparent pixels turn black, a fake dark background. 1.0 without alpha.
+    opaque_share: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ class NotMriThresholds:
     std_min: float = 10.0
     lowcontrast_std: float = 30.0
     dark_min: float = 0.15
+    opaque_min: float = 0.99
 
 
 def _total(histogram: list[int]) -> int:
@@ -121,9 +125,10 @@ def compute_features(
 
 def looks_not_mri(features: ImageFeatures, thresholds: NotMriThresholds) -> bool:
     """True when at least one condition holds: colour, noise, a nearly uniform frame,
-    or low contrast without the dark background of a scan."""
+    low contrast without the dark background of a scan, or noticeable transparency."""
     return (
-        features.color > thresholds.color_max
+        features.opaque_share < thresholds.opaque_min
+        or features.color > thresholds.color_max
         or (features.noise is not None and features.noise > thresholds.noise_max)
         or features.std < thresholds.std_min
         or (features.std < thresholds.lowcontrast_std and features.dark_share < thresholds.dark_min)

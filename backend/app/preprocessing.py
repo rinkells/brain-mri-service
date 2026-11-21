@@ -87,6 +87,8 @@ class DecodedImage:
     image: Image.Image  # RGB, as the training Dataset loaded it
     # The file itself was greyscale (GREY_MODES), so every pixel has R == G == B.
     grey: bool
+    # Share of fully opaque pixels (alpha 255) in the file; 1.0 when it has no transparency.
+    opaque_share: float = 1.0
 
 
 def decode_image(
@@ -139,9 +141,19 @@ def decode_upload(
         raise UnsupportedFormatError(MULTI_FRAME_MESSAGE)
 
     try:
-        return DecodedImage(image=to_rgb(image), grey=image.mode in GREY_MODES)
+        rgb, opaque_share = _to_rgb_and_opacity(image)
+        return DecodedImage(image=rgb, grey=image.mode in GREY_MODES, opaque_share=opaque_share)
     except Exception as exc:
         raise NotAnImageError("Зображення пошкоджене, його не вдалося прочитати.") from exc
+
+
+def _to_rgb_and_opacity(image: Image.Image) -> tuple[Image.Image, float]:
+    """to_rgb, and the share of fully opaque pixels (alpha 255) it saw."""
+    if not image.has_transparency_data:
+        return image.convert("RGB"), 1.0
+    alpha = image.convert("RGBA").getchannel("A")
+    opaque = alpha.histogram()[255] / (alpha.width * alpha.height)
+    return to_rgb(image), opaque
 
 
 def to_rgb(image: Image.Image) -> Image.Image:
