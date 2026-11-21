@@ -1,6 +1,5 @@
 """FastAPI application: health check, prediction and prediction history."""
 
-import hashlib
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -22,6 +21,7 @@ from app.config import (
     CLASS_NAMES,
     EXPECTED_IMAGE_SIZE,
     LOW_CONFIDENCE,
+    NOT_MRI_LIKE,
     UNEXPECTED_IMAGE_SIZE,
     Settings,
     get_settings,
@@ -31,13 +31,14 @@ from app.gradcam import encode_png_base64, overlay_heatmap
 from app.history import save_prediction
 from app.history_api import DATABASE_REJECTED_VALUE, DATABASE_UNAVAILABLE
 from app.history_api import router as history_router
+from app.input_check import ImageFeatures, NotMriThresholds, compute_features, looks_not_mri
 from app.limiter import InferenceLimiter, ServiceBusyError
 from app.model import BrainMRIClassifier, Prediction
 from app.preprocessing import (
     ImageTooLargeError,
     NotAnImageError,
     UnsupportedFormatError,
-    decode_image,
+    decode_upload,
 )
 from app.records import PredictionRecord
 from app.schemas import (
@@ -136,6 +137,21 @@ def size_warning(width: int, height: int) -> PredictionWarning | None:
     return PredictionWarning(code=UNEXPECTED_IMAGE_SIZE, message=SIZE_WARNING_MESSAGE)
 
 
+NOT_MRI_LIKE_MESSAGE = (
+    "Зображення не схоже на знімок МРТ (кольорове, шумне, однорідне або без темного фону). "
+    "Результат не можна вважати достовірним."
+)
+
+
+def not_mri_warning(
+    features: ImageFeatures, thresholds: NotMriThresholds
+) -> PredictionWarning | None:
+    """A warning, not a refusal: the prediction is still returned."""
+    if not looks_not_mri(features, thresholds):
+        return None
+    return PredictionWarning(code=NOT_MRI_LIKE, message=NOT_MRI_LIKE_MESSAGE)
+
+
 def confidence_warning(probability: float, threshold: float) -> PredictionWarning | None:
     """Warn when the top-1 probability is below the threshold.
 
@@ -202,7 +218,9 @@ async def predict(
 
     prediction = analysis.prediction
     top_probability = prediction.probabilities[prediction.predicted_class]
+    # The most serious first: an image that is not a scan makes the rest beside the point.
     candidates = (
+        not_mri_warning(analysis.features, settings.not_mri_thresholds),
         size_warning(analysis.width, analysis.height),
         confidence_warning(top_probability, settings.low_confidence_threshold),
     )
@@ -220,7 +238,6 @@ async def predict(
             image_width=analysis.width,
             image_height=analysis.height,
             warnings=[w.model_dump() for w in warnings],
-            image_sha256=analysis.sha256,
             gradcam_requested=gradcam,
             latency_ms=latency_ms,
             model_version=settings.model_version,
@@ -246,7 +263,7 @@ class Analysis:
     height: int
     prediction: Prediction
     heatmap: str | None  # PNG in base64, only when Grad-CAM was asked for
-    sha256: str
+    features: ImageFeatures  # for the not_mri_like warning
 
 
 def analyse(
@@ -254,13 +271,14 @@ def analyse(
 ) -> Analysis:
     """Decode and classify a scan: the CPU-heavy part of /predict, run in a worker thread."""
     try:
-        image = decode_image(data, settings.max_pixels, settings.max_image_side)
+        decoded = decode_upload(data, settings.max_pixels, settings.max_image_side)
     except ImageTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except UnsupportedFormatError as exc:
         raise HTTPException(status_code=415, detail=str(exc)) from exc
     except NotAnImageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    image = decoded.image
 
     prediction = classifier.predict(image, with_cam=gradcam)
 
@@ -273,7 +291,7 @@ def analyse(
         height=image.height,
         prediction=prediction,
         heatmap=heatmap,
-        sha256=hashlib.sha256(data).hexdigest(),
+        features=compute_features(image, grey=decoded.grey),
     )
 
 

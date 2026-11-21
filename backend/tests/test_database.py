@@ -135,7 +135,6 @@ def test_no_column_can_hold_the_image_or_its_name():
         "image_width",
         "image_height",
         "warnings",
-        "image_sha256",
         "gradcam_requested",
         "latency_ms",
         "model_version",
@@ -214,8 +213,20 @@ def test_existing_records_get_the_previous_model_version(tmp_path):
 
 def test_new_records_must_name_their_model(migrated_url):
     """The server default is only for old records: without a version, an insert fails."""
-    with pytest.raises(IntegrityError):
-        insert_first_schema_row(migrated_url, uuid.uuid4())
+    engine = create_db_engine(migrated_url)
+    try:
+        with pytest.raises(IntegrityError), engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO predictions (id, created_at, predicted_class, probabilities, "
+                    "image_width, image_height, warnings, gradcam_requested, latency_ms) "
+                    "VALUES (:id, '2026-11-01 12:00:00.000000', 'glioma', "
+                    "'{\"glioma\": 1.0}', 512, 512, '[]', 0, 1.5)"
+                ),
+                {"id": uuid.uuid4().hex},
+            )
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize("fields", CHECK_VIOLATIONS)
@@ -277,7 +288,10 @@ def test_offline_sql_targets_postgres(capsys):
 
 
 def insert_raw_warnings(url: str, warnings_json: str) -> uuid.UUID:
-    """Insert a record with plain SQL, so warnings can be anything at all."""
+    """Insert a record with plain SQL, so warnings can be anything at all.
+
+    Names the columns of migrations 0002 and 0003, image_sha256 included.
+    """
     record_id = uuid.uuid4()
     engine = create_db_engine(url)
     try:
@@ -336,7 +350,7 @@ def test_migration_passes_when_every_warnings_value_is_an_array(tmp_path):
     insert_raw_warnings(url, "[]")
     insert_raw_warnings(url, '[{"code": "low_confidence", "message": "Низька впевненість."}]')
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0003")
 
     assert current_revision(url) == "0003"
 
@@ -374,3 +388,98 @@ def test_model_declares_the_warnings_check_for_postgres_only():
         postgres_ddl
     )
     assert "jsonb_typeof" not in sqlite_ddl
+
+
+# --- The file hash is gone (0004) ----------------------------------------------
+
+
+def hash_column_and_index(url: str) -> tuple[dict | None, list[dict]]:
+    """The image_sha256 column (or None) and the indexes on predictions."""
+    engine = create_db_engine(url)
+    try:
+        inspector = inspect(engine)
+        columns = {column["name"]: column for column in inspector.get_columns("predictions")}
+        return columns.get("image_sha256"), inspector.get_indexes("predictions")
+    finally:
+        engine.dispose()
+
+
+def test_upgrade_drops_the_file_hash_and_its_index_but_keeps_the_records(tmp_path):
+    url = sqlite_url(tmp_path)
+    config = alembic_config(url)
+    command.upgrade(config, "0003")
+    old_id = insert_raw_warnings(url, "[]")
+
+    command.upgrade(config, "head")
+
+    column, indexes = hash_column_and_index(url)
+    assert column is None
+    assert {index["name"] for index in indexes} == {
+        "ix_predictions_created_at",
+        "ix_predictions_predicted_class",
+    }
+    database = Database.from_url(url)
+    with database.session() as session:
+        record = session.get(PredictionRecord, old_id)
+        assert (record.predicted_class, record.model_version) == ("glioma", "v")
+    database.dispose()
+
+
+def test_downgrade_restores_the_file_hash_as_nullable_with_its_index(migrated_url):
+    database = Database.from_url(migrated_url)
+    with database.session() as session:
+        record = make_record()
+        session.add(record)
+        session.commit()
+        record_id = record.id
+    database.dispose()
+
+    command.downgrade(alembic_config(migrated_url), "0003")
+
+    column, indexes = hash_column_and_index(migrated_url)
+    assert column is not None
+    assert column["nullable"] is True
+    assert column["type"].length == 64
+    assert {"name": "ix_predictions_image_sha256", "column_names": ["image_sha256"]} in [
+        {"name": index["name"], "column_names": index["column_names"]} for index in indexes
+    ]
+    engine = create_db_engine(migrated_url)
+    with engine.connect() as connection:
+        rows = connection.execute(text("SELECT id, image_sha256 FROM predictions")).all()
+    engine.dispose()
+    assert rows == [(record_id.hex, None)]
+    assert current_revision(migrated_url) == "0003"
+
+    # Code of that older version may again save records, now also without a hash.
+    engine = create_db_engine(migrated_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO predictions (id, created_at, predicted_class, probabilities, "
+                "image_width, image_height, warnings, gradcam_requested, latency_ms, "
+                "model_version) VALUES (:id, '2026-11-01 12:00:00.000000', 'glioma', "
+                "'{\"glioma\": 1.0}', 512, 512, '[]', 0, 1.5, 'v')"
+            ),
+            {"id": uuid.uuid4().hex},
+        )
+    engine.dispose()
+
+    command.upgrade(alembic_config(migrated_url), "head")
+
+    assert hash_column_and_index(migrated_url)[0] is None
+
+
+def test_offline_sql_drops_and_restores_the_file_hash_on_postgres(capsys):
+    url = "postgresql+psycopg://user:secret@localhost:5432/brain_mri"
+
+    command.upgrade(alembic_config(url), "0003:0004", sql=True)
+    upgrade_sql = capsys.readouterr().out
+    command.downgrade(alembic_config(url), "0004:0003", sql=True)
+    downgrade_sql = capsys.readouterr().out
+
+    assert "DROP INDEX ix_predictions_image_sha256" in upgrade_sql
+    assert "ALTER TABLE predictions DROP COLUMN image_sha256" in upgrade_sql
+    assert "ALTER TABLE predictions ADD COLUMN image_sha256 VARCHAR(64);" in downgrade_sql
+    assert (
+        "CREATE INDEX ix_predictions_image_sha256 ON predictions (image_sha256)" in downgrade_sql
+    )

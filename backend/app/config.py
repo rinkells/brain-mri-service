@@ -8,6 +8,10 @@ from urllib.parse import urlsplit
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.input_check import NotMriThresholds
+
+_NOT_MRI_DEFAULTS = NotMriThresholds()
+
 ClassName = Literal["glioma", "meningioma", "notumor", "pituitary"]
 
 # Order of the network outputs. It is fixed by the trained weights
@@ -22,7 +26,9 @@ EXPECTED_IMAGE_SIZE = (512, 512)
 # Codes of the warnings /predict returns. /stats reports each of them, even at zero.
 UNEXPECTED_IMAGE_SIZE = "unexpected_image_size"
 LOW_CONFIDENCE = "low_confidence"
-WARNING_CODES = (UNEXPECTED_IMAGE_SIZE, LOW_CONFIDENCE)
+# The image does not look like an MRI scan at all (see app.input_check).
+NOT_MRI_LIKE = "not_mri_like"
+WARNING_CODES = (UNEXPECTED_IMAGE_SIZE, LOW_CONFIDENCE, NOT_MRI_LIKE)
 
 # PadToSquare turns a scan into a side x side canvas, so a long thin image that is
 # within MAX_PIXELS (16384x1024) would still need a 16384 x 16384 canvas.
@@ -47,7 +53,8 @@ def comma_separated(value: object) -> object:
 class Settings(BaseSettings):
     """Settings taken from MODEL_PATH, MODEL_VERSION, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS,
     MAX_IMAGE_SIDE, MAX_CONCURRENT_INFERENCES, MAX_QUEUE, LOW_CONFIDENCE_THRESHOLD,
-    DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS and ENABLE_DOCS."""
+    NOT_MRI_COLOR_MAX, NOT_MRI_NOISE_MAX, NOT_MRI_STD_MIN, NOT_MRI_LOWCONTRAST_STD,
+    NOT_MRI_DARK_MIN, DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS and ENABLE_DOCS."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -71,6 +78,16 @@ class Settings(BaseSettings):
     max_queue: int = Field(default=20, ge=0)
     # A prediction whose top-1 probability is below this gets a low_confidence warning.
     low_confidence_threshold: float = Field(default=0.9, ge=0, le=1)
+    # A prediction gets a not_mri_like warning when at least one holds (all strict):
+    # colour > NOT_MRI_COLOR_MAX, noise > NOT_MRI_NOISE_MAX, brightness std < NOT_MRI_STD_MIN,
+    # or std < NOT_MRI_LOWCONTRAST_STD together with a dark share < NOT_MRI_DARK_MIN.
+    not_mri_color_max: float = Field(default=_NOT_MRI_DEFAULTS.color_max, ge=0, le=255)
+    not_mri_noise_max: float = Field(default=_NOT_MRI_DEFAULTS.noise_max, ge=0)
+    not_mri_std_min: float = Field(default=_NOT_MRI_DEFAULTS.std_min, ge=0, le=255)
+    not_mri_lowcontrast_std: float = Field(
+        default=_NOT_MRI_DEFAULTS.lowcontrast_std, ge=0, le=255
+    )
+    not_mri_dark_min: float = Field(default=_NOT_MRI_DEFAULTS.dark_min, ge=0, le=1)
     # SQLAlchemy URL of the prediction history, e.g.
     # postgresql+psycopg://user:password@localhost:5432/brain_mri.
     # Without it the service still predicts, but keeps no history.
@@ -120,6 +137,16 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return int(self.max_upload_mb * 1024 * 1024)
+
+    @property
+    def not_mri_thresholds(self) -> NotMriThresholds:
+        return NotMriThresholds(
+            color_max=self.not_mri_color_max,
+            noise_max=self.not_mri_noise_max,
+            std_min=self.not_mri_std_min,
+            lowcontrast_std=self.not_mri_lowcontrast_std,
+            dark_min=self.not_mri_dark_min,
+        )
 
 
 @lru_cache

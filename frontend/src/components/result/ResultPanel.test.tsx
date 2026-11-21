@@ -16,6 +16,12 @@ const SIZE: PredictionWarning = {
     'Розмір знімка відрізняється від 512×512. Для гліом такого формату recall у перевірці був ' +
     '≈ 0,51 (проти ≈ 0,99 для 512×512): якщо є підозра на гліому, результат менш надійний.',
 }
+const NOT_MRI_LIKE: PredictionWarning = {
+  code: 'not_mri_like',
+  message:
+    'Зображення не схоже на знімок МРТ (кольорове, шумне, однорідне або без темного фону). ' +
+    'Результат не можна вважати достовірним.',
+}
 // A code the interface has no special presentation for.
 const OTHER: PredictionWarning = {
   code: 'some_future_warning',
@@ -28,6 +34,10 @@ function renderResult(warnings: PredictionWarning[]) {
 
 function lowConfidenceNotice() {
   return screen.queryByRole('region', { name: 'Низька впевненість моделі' })
+}
+
+function notMriNotice() {
+  return screen.queryByRole('region', { name: 'Зображення не схоже на МРТ' })
 }
 
 /** The yellow "Зверніть увагу" list, or null. */
@@ -65,6 +75,37 @@ describe('low confidence', () => {
     expect(lowConfidenceNotice()).not.toBeInTheDocument()
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
     expect(warningList()).not.toBeInTheDocument()
+  })
+})
+
+describe('not MRI-like', () => {
+  test('is a yellow block above the result with the message', () => {
+    renderResult([NOT_MRI_LIKE])
+
+    const notice = notMriNotice()!
+    expect(notice).toBeInTheDocument()
+    expect(notice).toHaveClass('bg-amber-50')
+    expect(notice.querySelector('[data-icon="warning"]')).toBeInTheDocument()
+    expect(notice).toHaveTextContent(NOT_MRI_LIKE.message)
+    expect(follows(notice, resultHeading())).toBe(true)
+    // The prediction is still shown, and the message is not repeated in the list.
+    expect(screen.getByTestId('predicted-class')).toHaveTextContent('Менінгіома')
+    expect(warningList()).not.toBeInTheDocument()
+  })
+
+  test('comes first when other warnings come too', () => {
+    renderResult([NOT_MRI_LIKE, SIZE, LOW_CONFIDENCE])
+
+    expect(follows(notMriNotice()!, lowConfidenceNotice()!)).toBe(true)
+    expect(screen.getByRole('note')).toHaveTextContent(SIZE.message)
+    expect(screen.getAllByText(NOT_MRI_LIKE.message)).toHaveLength(1)
+    expect(warningList()).not.toBeInTheDocument()
+  })
+
+  test('is not shown for a scan without it', () => {
+    renderResult([LOW_CONFIDENCE])
+
+    expect(notMriNotice()).not.toBeInTheDocument()
   })
 })
 

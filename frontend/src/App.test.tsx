@@ -96,6 +96,17 @@ describe('file validation before upload', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
+  test('a small scan shows its size in kilobytes, not as 0 MB', async () => {
+    mockApi()
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.upload(fileInput(), makeFile('small.png', 'image/png', 14 * 1024))
+
+    expect(screen.getByText(/· 14 КБ/)).toBeInTheDocument()
+    expect(screen.queryByText(/· 0 МБ/)).not.toBeInTheDocument()
+  })
+
   test('a file of another format is refused without contacting the server', async () => {
     const fetchMock = mockApi()
     // The OS dialog lets the user pick "All files", bypassing the accept filter.

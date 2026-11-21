@@ -15,6 +15,7 @@ from app.preprocessing import (
     UnsupportedFormatError,
     build_transform,
     decode_image,
+    decode_upload,
     square_padding,
 )
 from tests.helpers import encode_image, image_bytes, make_image
@@ -346,3 +347,41 @@ def test_transparency_is_honoured_in_other_modes(mode):
 
     assert (decoded[:, :8] == 200).all()
     assert (decoded[:, 8:] == 0).all()
+
+
+# --- Grey sources -------------------------------------------------------------
+
+
+def grey_with_alpha_png() -> bytes:
+    pixels = np.dstack([np.asarray(make_image(64, 64)), np.full((64, 64), 128, dtype=np.uint8)])
+    return encode_image(Image.fromarray(pixels, mode="LA"))
+
+
+def palette_png() -> bytes:
+    return encode_image(make_image(64, 64, "RGB").convert("P"))
+
+
+@pytest.mark.parametrize(
+    ("data", "grey"),
+    [
+        (image_bytes(64, 64, "PNG", "L"), True),
+        (image_bytes(64, 64, "JPEG", "L"), True),
+        (image_bytes(64, 64, "PNG", "1"), True),
+        (grey_with_alpha_png(), True),
+        (image_bytes(64, 64, "PNG", "RGB"), False),
+        (image_bytes(64, 64, "JPEG", "RGB"), False),
+        (image_bytes(64, 64, "PNG", "RGBA"), False),
+        (palette_png(), False),
+    ],
+    ids=["L-png", "L-jpeg", "1-png", "LA-png", "RGB-png", "RGB-jpeg", "RGBA-png", "P-png"],
+)
+def test_decode_upload_tells_whether_the_file_is_grey(data, grey):
+    decoded = decode_upload(data, MAX_PIXELS)
+
+    assert decoded.grey is grey
+    assert decoded.image.mode == "RGB"
+    assert np.array_equal(np.asarray(decoded.image), np.asarray(decode_image(data, MAX_PIXELS)))
+    if grey:
+        # The promise behind the flag: no pixel has any colour.
+        r, g, b = np.asarray(decoded.image).transpose(2, 0, 1)
+        assert np.array_equal(r, g) and np.array_equal(g, b)

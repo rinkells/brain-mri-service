@@ -161,8 +161,7 @@ export interface components {
         };
         /**
          * PredictionRecordResponse
-         * @description A saved prediction. The scan itself and its file name are never stored, and the
-         *     SHA-256 of the file, which is stored, is never returned: it identifies the scan.
+         * @description A saved prediction. The scan itself, its file name and its hash are never stored.
          */
         PredictionRecordResponse: {
             /**
@@ -246,7 +245,7 @@ export interface components {
         PredictionWarning: {
             /**
              * Code
-             * @description Сталий ідентифікатор попередження для програмної обробки
+             * @description Сталий ідентифікатор попередження для програмної обробки: unexpected_image_size, low_confidence або not_mri_like
              */
             code: string;
             /**

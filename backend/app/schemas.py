@@ -22,7 +22,12 @@ class ImageSize(BaseModel):
 
 
 class PredictionWarning(BaseModel):
-    code: str = Field(description="Сталий ідентифікатор попередження для програмної обробки")
+    code: str = Field(
+        description=(
+            "Сталий ідентифікатор попередження для програмної обробки: unexpected_image_size, "
+            "low_confidence або not_mri_like"
+        )
+    )
     message: str = Field(description="Пояснення для людини")
 
 
@@ -47,8 +52,7 @@ class PredictionResponse(BaseModel):
 
 
 class PredictionRecordResponse(BaseModel):
-    """A saved prediction. The scan itself and its file name are never stored, and the
-    SHA-256 of the file, which is stored, is never returned: it identifies the scan."""
+    """A saved prediction. The scan itself, its file name and its hash are never stored."""
 
     id: UUID
     created_at: datetime = Field(description="Час прогнозу в UTC")

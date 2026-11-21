@@ -1,9 +1,10 @@
 import type { StatsResponse } from '../../api/types'
 import { CLASS_LABELS, CLASS_ORDER } from '../../lib/classes'
 import { formatMilliseconds, formatPercent } from '../../lib/format'
-import { LOW_CONFIDENCE, UNEXPECTED_IMAGE_SIZE } from '../../lib/warnings'
+import { LOW_CONFIDENCE, NOT_MRI_LIKE, UNEXPECTED_IMAGE_SIZE } from '../../lib/warnings'
 
 const WARNING_ROWS = [
+  { code: NOT_MRI_LIKE, label: 'Не схоже на МРТ' },
   { code: LOW_CONFIDENCE, label: 'Низька впевненість' },
   { code: UNEXPECTED_IMAGE_SIZE, label: 'Нетиповий розмір знімка' },
 ]

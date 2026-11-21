@@ -5,6 +5,7 @@ import { groupWarnings } from '../../lib/warnings'
 import { HeatmapView } from './HeatmapView'
 import { ImageSizeNote } from './ImageSizeNote'
 import { LowConfidenceNotice } from './LowConfidenceNotice'
+import { NotMriLikeNotice } from './NotMriLikeNotice'
 import { ProbabilityBars } from './ProbabilityBars'
 import { WarningList } from './WarningList'
 
@@ -16,11 +17,12 @@ interface ResultPanelProps {
 export function ResultPanel({ result, scanUrl }: ResultPanelProps) {
   const predicted = result.predicted_class
   const confidence = result.probabilities[predicted] ?? 0
-  // Low confidence and image size have their own presentation; other codes go to the list.
+  // Known codes have their own presentation; other codes go to the list.
   const warnings = groupWarnings(result.warnings)
 
   return (
     <section aria-labelledby="result-heading" className="space-y-6">
+      {warnings.notMriLike && <NotMriLikeNotice message={warnings.notMriLike.message} />}
       {warnings.lowConfidence && <LowConfidenceNotice />}
 
       <div>

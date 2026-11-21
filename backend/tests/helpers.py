@@ -36,7 +36,6 @@ def make_record(**fields) -> PredictionRecord:
         "image_width": 512,
         "image_height": 512,
         "warnings": [],
-        "image_sha256": "0" * 64,
         "gradcam_requested": False,
         "latency_ms": 12.5,
         "model_version": "resnet18_v2c",

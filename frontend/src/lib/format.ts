@@ -16,6 +16,19 @@ export function formatMegabytes(bytes: number): string {
   return `${megabyteFormat.format(bytes / 1024 / 1024)} МБ`
 }
 
+/**
+ * Size of a chosen file: kilobytes below 1 MB, megabytes from there on.
+ * 14_336 -> "14 КБ", 2_411_725 -> "2,3 МБ". A non-empty file is at least "1 КБ", never "0".
+ */
+export function formatFileSize(bytes: number): string {
+  const kilobytes = Math.round(bytes / 1024)
+  if (kilobytes >= 1024) {
+    return formatMegabytes(bytes)
+  }
+  // A whole number from 0 to 1023: no decimal separator or digit grouping to format.
+  return `${bytes > 0 ? Math.max(kilobytes, 1) : 0} КБ`
+}
+
 const dateTimeFormat = new Intl.DateTimeFormat('uk-UA', { dateStyle: 'short', timeStyle: 'medium' })
 
 /** ISO timestamp from the API (UTC) -> local date and time, e.g. "12.11.26, 23:42:29". */
