@@ -1,9 +1,8 @@
 """Table of the prediction history.
 
-Only the outcome of a prediction is stored. The scan itself and the file name
-are never saved: they are medical data. The SHA-256 of the file is kept so
-repeated uploads of the same scan can be recognised in the database; the API
-never returns it, because it identifies the scan.
+Only the outcome of a prediction is stored. The scan itself, the file name and
+anything that identifies the file, such as its hash, are never saved: they are
+medical data.
 """
 
 import uuid
@@ -72,7 +71,6 @@ class PredictionRecord(Base):
     image_width: Mapped[int]
     image_height: Mapped[int]
     warnings: Mapped[list[dict[str, str]]] = mapped_column(JSONType)
-    image_sha256: Mapped[str] = mapped_column(String(64), index=True)
     gradcam_requested: Mapped[bool]
     latency_ms: Mapped[float]
     # MODEL_VERSION of the weights that made the prediction. There is no default:

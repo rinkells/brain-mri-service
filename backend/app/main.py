@@ -1,6 +1,5 @@
 """FastAPI application: health check, prediction and prediction history."""
 
-import hashlib
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -220,7 +219,6 @@ async def predict(
             image_width=analysis.width,
             image_height=analysis.height,
             warnings=[w.model_dump() for w in warnings],
-            image_sha256=analysis.sha256,
             gradcam_requested=gradcam,
             latency_ms=latency_ms,
             model_version=settings.model_version,
@@ -246,7 +244,6 @@ class Analysis:
     height: int
     prediction: Prediction
     heatmap: str | None  # PNG in base64, only when Grad-CAM was asked for
-    sha256: str
 
 
 def analyse(
@@ -273,7 +270,6 @@ def analyse(
         height=image.height,
         prediction=prediction,
         heatmap=heatmap,
-        sha256=hashlib.sha256(data).hexdigest(),
     )
 
 

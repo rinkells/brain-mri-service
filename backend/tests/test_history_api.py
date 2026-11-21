@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.exc import DataError, OperationalError, ProgrammingError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
@@ -54,8 +54,8 @@ def records_at(*classes, warnings_from=None):
 # --- Saving after POST /predict -----------------------------------------------
 
 
-def test_file_hash_is_stored_but_never_returned(history_client):
-    """The SHA-256 of a scan identifies the file: it stays in the database only."""
+def test_file_hash_is_neither_stored_nor_returned(history_client, database):
+    """The SHA-256 of a scan identifies the file, and nothing reads it: it is not kept."""
     data = image_bytes(640, 480)
     digest = hashlib.sha256(data).hexdigest()
 
@@ -67,8 +67,10 @@ def test_file_hash_is_stored_but_never_returned(history_client):
         assert response.status_code == 200
         assert digest not in response.text
         assert "image_sha256" not in response.text
-    assert "image_sha256" not in listed.json()["items"][0]
-    assert "image_sha256" not in single.json()
+    with database.engine.connect() as connection:
+        (row,) = connection.execute(text("SELECT * FROM predictions")).all()
+    assert digest not in repr(tuple(row))
+    assert "image_sha256" not in row._fields
 
 
 def test_openapi_does_not_mention_the_file_hash(client):
@@ -89,7 +91,6 @@ def test_successful_prediction_is_saved(history_client, database):
     assert (record.image_width, record.image_height) == (640, 480)
     assert record.warnings == body["warnings"]
     assert record.warnings[0]["code"] == "unexpected_image_size"
-    assert record.image_sha256 == hashlib.sha256(data).hexdigest()
     assert record.gradcam_requested is False
     assert record.latency_ms > 0
     assert record.model_version == body["model_version"] == MODEL_VERSION
