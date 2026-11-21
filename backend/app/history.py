@@ -6,6 +6,8 @@ import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import Integer, delete, func, select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.functions import FunctionElement
@@ -42,8 +44,9 @@ def save_prediction(database: Database | None, record: PredictionRecord) -> uuid
     """Store a finished prediction and return its id.
 
     History must never break a prediction: when there is no database, or it
-    fails, the error is logged and None is returned. After a failure the
-    database is not tried again for SAVE_RETRY_AFTER_S seconds.
+    fails, the error is logged and None is returned. Only when the database cannot
+    be reached (or no connection is free in time) is it not tried again for
+    SAVE_RETRY_AFTER_S seconds; a record it rejects says nothing about the others.
     """
     if database is None:
         return None
@@ -58,9 +61,13 @@ def save_prediction(database: Database | None, record: PredictionRecord) -> uuid
             session.add(record)
             session.commit()
             return record.id
-    except Exception:
+    except (OperationalError, PoolTimeoutError):
         database.saving_paused_until = time.monotonic() + SAVE_RETRY_AFTER_S
         logger.exception("Could not save the prediction to the history database")
+        return None
+    except Exception:
+        # The database answered but refused this record (e.g. a constraint): no pause.
+        logger.exception("The history database rejected the prediction; it was not saved")
         return None
 
 
