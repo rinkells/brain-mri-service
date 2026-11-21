@@ -572,7 +572,6 @@ def test_stats_follow_new_predictions_and_deletes(history_client):
     assert stats["warnings_by_code"] == by_code()
 
 
-
 def test_not_mri_like_prediction_is_saved_and_counted(history_client, database):
     grey = encode_image(Image.new("RGB", (512, 512), (128, 128, 128)))
 
