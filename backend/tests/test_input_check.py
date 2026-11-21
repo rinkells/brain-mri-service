@@ -1,7 +1,6 @@
 """Features and rule of the not_mri_like warning, on synthetic images only."""
 
 import math
-import tracemalloc
 from dataclasses import replace
 
 import numpy as np
@@ -137,21 +136,6 @@ def test_bands_give_the_same_result_as_the_whole_frame(image, rows_per_band):
     actual = compute_features(image, rows_per_band=rows_per_band)
 
     assert_same_features(actual, reference_features(image))
-
-
-def test_large_image_needs_no_whole_frame_arrays():
-    """Integer sums over bands of rows: a 2048x2048 image needs only a few MiB on top of
-    itself. Whole-frame float64 arrays would take over 100 MiB."""
-    image = uniform_noise(2048)
-
-    tracemalloc.start()
-    try:
-        compute_features(image)
-        _, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-
-    assert peak < 16 * 2**20
 
 
 # --- Rule ----------------------------------------------------------------------

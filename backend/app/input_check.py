@@ -9,19 +9,20 @@ The thresholds were chosen on the 7200 scans of the Kaggle dataset (none flagged
 16 synthetic and everyday images (all flagged); see the README.
 
 The features are computed on the decoded RGB image at its own resolution. To keep
-4096x4096 uploads cheap, the image is read in bands of rows and only integer sums are
-kept, so the result is exact and no whole-frame array is ever made.
+4096x4096 uploads cheap, the image is read in bands of rows with Pillow's C operations,
+and every sum is taken from a 256-bin histogram: the integer sums are exact and no
+whole-frame copy is made.
 """
 
 import math
 from dataclasses import dataclass
 
-import numpy as np
-from PIL import Image
+from PIL import Image, ImageChops
 
-# A "dark" pixel has a brightness (PIL "L", 0..255) below 10 % of the scale.
+# A "dark" pixel has a brightness (PIL "L", 0..255) below 10 % of the scale, i.e. 0..25.
 DARK_LEVEL = 0.10 * 255
-ROWS_PER_BAND = 256
+_DARK_VALUES = math.ceil(DARK_LEVEL)
+ROWS_PER_BAND = 512
 
 
 @dataclass(frozen=True)
@@ -48,31 +49,54 @@ class NotMriThresholds:
     dark_min: float = 0.15
 
 
+def _total(histogram: list[int]) -> int:
+    """Sum of the pixel values of an "L" image, from its 256-bin histogram."""
+    return sum(value * count for value, count in enumerate(histogram))
+
+
+def _squares(histogram: list[int]) -> int:
+    return sum(value * value * count for value, count in enumerate(histogram))
+
+
+def _difference_sum(first: Image.Image, second: Image.Image) -> int:
+    """Sum of |first - second| over the pixels of two "L" images of the same size."""
+    return _total(ImageChops.difference(first, second).histogram())
+
+
 def compute_features(image: Image.Image, rows_per_band: int = ROWS_PER_BAND) -> ImageFeatures:
     width, height = image.size
     pixels = width * height
     color_sum = brightness_sum = brightness_squares = neighbour_diffs = dark = 0
-    previous_row: np.ndarray | None = None
+    previous_row: Image.Image | None = None
 
     for top in range(0, height, rows_per_band):
-        band = image.crop((0, top, width, min(top + rows_per_band, height)))
+        rows = min(rows_per_band, height - top)
+        band = image.crop((0, top, width, top + rows))
         if band.mode != "RGB":
             band = band.convert("RGB")
-        rgb = np.asarray(band)
         # max(|R-G|, |G-B|, |R-B|) is the largest channel minus the smallest.
-        color_sum += int((rgb.max(axis=2) - rgb.min(axis=2)).sum(dtype=np.int64))
+        red, green, blue = band.split()
+        largest = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+        smallest = ImageChops.darker(ImageChops.darker(red, green), blue)
+        color_sum += _total(ImageChops.subtract(largest, smallest).histogram())
 
-        gray = np.asarray(band.convert("L"))
-        values = gray.astype(np.int32)
-        brightness_sum += int(values.sum(dtype=np.int64))
-        brightness_squares += int((values * values).sum(dtype=np.int64))
-        dark += int(np.count_nonzero(gray < DARK_LEVEL))
+        gray = band.convert("L")
+        histogram = gray.histogram()
+        brightness_sum += _total(histogram)
+        brightness_squares += _squares(histogram)
+        dark += sum(histogram[:_DARK_VALUES])
 
-        neighbour_diffs += int(np.abs(np.diff(values, axis=1)).sum(dtype=np.int64))
-        neighbour_diffs += int(np.abs(np.diff(values, axis=0)).sum(dtype=np.int64))
+        if width > 1:
+            neighbour_diffs += _difference_sum(
+                gray.crop((1, 0, width, rows)), gray.crop((0, 0, width - 1, rows))
+            )
+        if rows > 1:
+            neighbour_diffs += _difference_sum(
+                gray.crop((0, 1, width, rows)), gray.crop((0, 0, width, rows - 1))
+            )
         if previous_row is not None:
-            neighbour_diffs += int(np.abs(values[0] - previous_row).sum(dtype=np.int64))
-        previous_row = values[-1]
+            neighbour_diffs += _difference_sum(gray.crop((0, 0, width, 1)), previous_row)
+        previous_row = gray.crop((0, rows - 1, width, rows))
 
     # Exact integer variance: (n * sum(x^2) - sum(x)^2) / n^2.
     variance = (pixels * brightness_squares - brightness_sum**2) / pixels**2
