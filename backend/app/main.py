@@ -38,7 +38,7 @@ from app.preprocessing import (
     ImageTooLargeError,
     NotAnImageError,
     UnsupportedFormatError,
-    decode_image,
+    decode_upload,
 )
 from app.records import PredictionRecord
 from app.schemas import (
@@ -271,13 +271,14 @@ def analyse(
 ) -> Analysis:
     """Decode and classify a scan: the CPU-heavy part of /predict, run in a worker thread."""
     try:
-        image = decode_image(data, settings.max_pixels, settings.max_image_side)
+        decoded = decode_upload(data, settings.max_pixels, settings.max_image_side)
     except ImageTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except UnsupportedFormatError as exc:
         raise HTTPException(status_code=415, detail=str(exc)) from exc
     except NotAnImageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    image = decoded.image
 
     prediction = classifier.predict(image, with_cam=gradcam)
 
@@ -290,7 +291,7 @@ def analyse(
         height=image.height,
         prediction=prediction,
         heatmap=heatmap,
-        features=compute_features(image),
+        features=compute_features(image, grey=decoded.grey),
     )
 
 

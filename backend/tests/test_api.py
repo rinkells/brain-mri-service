@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.config import CLASS_NAMES, Settings
+from app import main
 from app.main import create_app
 from app.model import ModelLoadError, Prediction
 from tests.conftest import MAX_UPLOAD_MB, MODEL_VERSION
@@ -291,6 +292,35 @@ def test_not_mri_like_comes_first_among_the_warnings(with_top_probability):
     response = post_image(with_top_probability(0.5), noise_png(640, 480))
 
     assert codes(response) == ["not_mri_like", "unexpected_image_size", "low_confidence"]
+
+
+@pytest.mark.parametrize(
+    ("data", "grey"),
+    [(image_bytes(512, 512, mode="L"), True), (image_bytes(512, 512, mode="RGB"), False)],
+    ids=["grey-file", "rgb-file"],
+)
+def test_predict_skips_the_colour_pass_only_for_grey_files(client, monkeypatch, data, grey):
+    calls = []
+    real = main.compute_features
+
+    def spy(image, **kwargs):
+        calls.append(kwargs)
+        return real(image, **kwargs)
+
+    monkeypatch.setattr(main, "compute_features", spy)
+
+    response = post_image(client, data)
+
+    assert response.status_code == 200
+    assert calls == [{"grey": grey}]
+
+
+def test_grey_noise_still_gets_not_mri_like(client):
+    pixels = np.random.default_rng(0).integers(0, 256, (512, 512), dtype=np.uint8)
+
+    response = post_image(client, encode_image(Image.fromarray(pixels)))
+
+    assert "not_mri_like" in codes(response)
 
 
 def test_not_mri_thresholds_are_taken_from_settings(with_top_probability, settings):

@@ -63,7 +63,11 @@ def _difference_sum(first: Image.Image, second: Image.Image) -> int:
     return _total(ImageChops.difference(first, second).histogram())
 
 
-def compute_features(image: Image.Image, rows_per_band: int = ROWS_PER_BAND) -> ImageFeatures:
+def compute_features(
+    image: Image.Image, rows_per_band: int = ROWS_PER_BAND, *, grey: bool = False
+) -> ImageFeatures:
+    """grey=True promises that every pixel has R == G == B (the file was greyscale): the
+    colour pass, more than half of the work, is skipped and colour is 0."""
     width, height = image.size
     pixels = width * height
     color_sum = brightness_sum = brightness_squares = neighbour_diffs = dark = 0
@@ -74,11 +78,12 @@ def compute_features(image: Image.Image, rows_per_band: int = ROWS_PER_BAND) -> 
         band = image.crop((0, top, width, top + rows))
         if band.mode != "RGB":
             band = band.convert("RGB")
-        # max(|R-G|, |G-B|, |R-B|) is the largest channel minus the smallest.
-        red, green, blue = band.split()
-        largest = ImageChops.lighter(ImageChops.lighter(red, green), blue)
-        smallest = ImageChops.darker(ImageChops.darker(red, green), blue)
-        color_sum += _total(ImageChops.subtract(largest, smallest).histogram())
+        if not grey:
+            # max(|R-G|, |G-B|, |R-B|) is the largest channel minus the smallest.
+            red, green, blue = band.split()
+            largest = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+            smallest = ImageChops.darker(ImageChops.darker(red, green), blue)
+            color_sum += _total(ImageChops.subtract(largest, smallest).histogram())
 
         gray = band.convert("L")
         histogram = gray.histogram()

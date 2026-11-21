@@ -138,6 +138,30 @@ def test_bands_give_the_same_result_as_the_whole_frame(image, rows_per_band):
     assert_same_features(actual, reference_features(image))
 
 
+@pytest.mark.parametrize(
+    "image",
+    [
+        make_image(300, 200, "RGB"),
+        uniform_noise(97),
+        gaussian_noise(),
+        solid(0),
+        solid(255),
+        rgb(np.arange(1, 11).reshape(1, 10) * 20),
+    ],
+    ids=["scan", "uniform-noise", "gaussian-noise", "black", "white", "one-row"],
+)
+def test_grey_shortcut_gives_the_full_result(image):
+    """For a grey source the colour pass is skipped; everything else is the same."""
+    assert compute_features(image, grey=True) == compute_features(image)
+
+
+def test_colour_images_are_measured_in_full_by_default():
+    image = tinted_scan()
+
+    assert compute_features(image).color > DEFAULTS.color_max
+    assert_same_features(compute_features(image), reference_features(image))
+
+
 # --- Rule ----------------------------------------------------------------------
 
 # Values a real scan typically has (see the README): nothing is near a threshold.

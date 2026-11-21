@@ -1,6 +1,7 @@
 """Decoding of uploaded files and the preprocessing the model was trained with."""
 
 import io
+from dataclasses import dataclass
 
 from PIL import Image
 from torchvision import transforms as T
@@ -20,6 +21,8 @@ HIGH_BIT_DEPTH_MODES = frozenset({"I", "I;16", "I;16L", "I;16B", "I;16N", "F"})
 HIGH_BIT_DEPTH_MESSAGE = (
     "16-бітні зображення не підтримуються: експортуйте як 8-бітний PNG або JPEG."
 )
+# Modes without colour: after the conversion to RGB every pixel has R == G == B.
+GREY_MODES = frozenset({"1", "L", "LA"})
 MULTI_FRAME_MESSAGE = (
     "Зображення з кількома кадрами (анімований PNG) не підтримуються: збережіть знімок "
     "як звичайний PNG або JPEG."
@@ -79,10 +82,24 @@ def build_transform() -> T.Compose:
     )
 
 
+@dataclass(frozen=True)
+class DecodedImage:
+    image: Image.Image  # RGB, as the training Dataset loaded it
+    # The file itself was greyscale (GREY_MODES), so every pixel has R == G == B.
+    grey: bool
+
+
 def decode_image(
     data: bytes, max_pixels: int, max_side: int = DEFAULT_MAX_IMAGE_SIDE
 ) -> Image.Image:
-    """Decode an uploaded JPEG (or MPO) or PNG into an RGB image, as the training Dataset did.
+    """Decode an uploaded JPEG (or MPO) or PNG into an RGB image, as the training Dataset did."""
+    return decode_upload(data, max_pixels, max_side).image
+
+
+def decode_upload(
+    data: bytes, max_pixels: int, max_side: int = DEFAULT_MAX_IMAGE_SIDE
+) -> DecodedImage:
+    """decode_image, and whether the file was greyscale before the conversion to RGB.
 
     The format is detected from the file content, not from its name or Content-Type.
     """
@@ -122,7 +139,7 @@ def decode_image(
         raise UnsupportedFormatError(MULTI_FRAME_MESSAGE)
 
     try:
-        return to_rgb(image)
+        return DecodedImage(image=to_rgb(image), grey=image.mode in GREY_MODES)
     except Exception as exc:
         raise NotAnImageError("Зображення пошкоджене, його не вдалося прочитати.") from exc
 
