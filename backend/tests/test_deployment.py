@@ -384,3 +384,13 @@ def test_uvicorn_leaves_proxy_headers_to_the_app(services):
 
     assert cmd[0] == "uvicorn" and "--no-proxy-headers" in cmd
     assert "exec uvicorn" in command and "--no-proxy-headers" in command
+
+
+def test_nginx_passes_the_sec_fetch_headers_on_to_the_api():
+    """The API refuses requests from pages of other sites by Sec-Fetch-Site
+    (CrossSiteCheckMiddleware), so nginx must forward the browser's headers unchanged."""
+    conf = nginx_conf()
+
+    assert "proxy_pass_request_headers off" not in conf
+    assert not re.search(r"proxy_set_header\s+Sec-Fetch-", conf, re.IGNORECASE)
+    assert "more_clear_input_headers" not in conf
