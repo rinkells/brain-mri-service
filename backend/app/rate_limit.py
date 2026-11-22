@@ -100,9 +100,9 @@ class SlidingWindowLimiter:
                 return times[0] + self.window_s - now
         else:
             if len(self._hits) >= self.max_keys:
-                self._sweep(now)
-                if len(self._hits) >= self.max_keys:
-                    self._hits.popitem(last=False)
+                # O(1): the key idle for longest goes. Stale keys are left to the next
+                # periodic sweep, so a flood of new keys never walks the whole table.
+                self._hits.popitem(last=False)
             times = self._hits[key] = deque(maxlen=self.limit)
         times.append(now)
         return 0.0

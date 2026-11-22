@@ -4,6 +4,7 @@ A fake clock drives the window, so no test waits for real time to pass.
 """
 
 import ipaddress
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 
 import pytest
@@ -106,6 +107,69 @@ def test_the_number_of_keys_is_capped():
     # The least recently active keys were dropped; the newest are kept.
     assert limiter.tracked("client-149") == 1
     assert limiter.tracked("client-0") == 0
+
+
+class CountingOrderedDict(OrderedDict):
+    """Counts every entry an iteration over it looks at."""
+
+    visits = 0
+
+    def _count(self, entries):
+        for entry in entries:
+            self.visits += 1
+            yield entry
+
+    def __iter__(self):
+        return self._count(super().__iter__())
+
+    def keys(self):
+        return self._count(super().keys())
+
+    def values(self):
+        return self._count(super().values())
+
+    def items(self):
+        return self._count(super().items())
+
+
+def full_limiter(clock, max_keys=1000):
+    limiter = SlidingWindowLimiter(limit=1, window_s=60, max_keys=max_keys, clock=clock)
+    for n in range(max_keys):
+        limiter.hit(f"client-{n}")
+    # Internal on purpose: count how many tracked keys each request looks at.
+    limiter._hits = CountingOrderedDict(limiter._hits)
+    return limiter
+
+
+def test_a_new_key_in_a_full_table_evicts_the_oldest_without_walking_the_table():
+    clock = FakeClock()
+    limiter = full_limiter(clock)
+
+    for n in range(50):
+        limiter.hit(f"new-{n}")
+
+    assert limiter._hits.visits == 0
+    assert len(limiter) == 1000
+    assert [limiter.tracked(f"client-{n}") for n in (0, 49, 50)] == [0, 0, 1]
+    assert limiter.tracked("new-49") == 1
+
+
+def test_stale_keys_are_swept_at_most_once_per_window():
+    clock = FakeClock()
+    limiter = full_limiter(clock)
+    clock.advance(30)
+    limiter.hit("before-the-window-ends")
+    assert limiter._hits.visits == 0
+
+    clock.advance(31)  # one window after the table was filled
+    limiter.hit("after")
+    first_sweep = limiter._hits.visits
+    for n in range(100):
+        limiter.hit(f"later-{n}")
+
+    assert first_sweep > 0  # the stale keys were looked at once ...
+    assert limiter._hits.visits == first_sweep  # ... and not again within the window
+    assert limiter.tracked("client-0") == 0 and limiter.tracked("before-the-window-ends") == 1
 
 
 def test_keys_whose_window_has_passed_are_dropped():
