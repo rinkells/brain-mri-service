@@ -77,8 +77,9 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:${API_PORT:-8000},http://127.0.0.1:${API_PORT:-8000},http://localhost:8080,http://127.0.0.1:8080}
     volumes:
       - ./backend/models:/srv/models:ro
-    # Bring the schema up to date, then start the server.
-    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    # Bring the schema up to date, then start the server. Proxy headers are left to the
+    # app (see the Dockerfile).
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers"]
     ports:
       # No authentication yet, so the API is published on localhost only.
       - "127.0.0.1:${API_PORT:-8000}:8000"

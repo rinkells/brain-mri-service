@@ -373,3 +373,14 @@ def test_example_env_files_hold_the_default_rate_limits(path):
     values = dict(line.split("=", 1) for line in lines if line.startswith("RATE_LIMIT_"))
 
     assert {name: value.lower() for name, value in values.items()} == RATE_LIMIT_DEFAULTS
+
+
+def test_uvicorn_leaves_proxy_headers_to_the_app(services):
+    """Without --no-proxy-headers uvicorn would take the client from X-Forwarded-For sent
+    from 127.0.0.1 (e.g. through the Vite dev proxy) and change the rate limit key."""
+    dockerfile = (REPO_DIR / "backend" / "Dockerfile").read_text(encoding="utf-8")
+    cmd = json.loads(re.search(r"^CMD (\[.*\])$", dockerfile, re.MULTILINE).group(1))
+    command = " ".join(services["api"]["command"])
+
+    assert cmd[0] == "uvicorn" and "--no-proxy-headers" in cmd
+    assert "exec uvicorn" in command and "--no-proxy-headers" in command

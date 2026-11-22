@@ -259,8 +259,13 @@ cd ..
 ```powershell
 .\.venv\Scripts\Activate.ps1
 cd backend
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000 --no-proxy-headers
 ```
+
+`--no-proxy-headers` вимикає власну обробку заголовків проксі в uvicorn: інакше він брав би
+адресу клієнта з `X-Forwarded-For` у запитів від `127.0.0.1` (а через проксі Vite всі запити
+приходять саме звідти), і клієнт міг би підмінити ключ ліміту частоти запитів. Адресу за
+проксі визначає сам застосунок (див. «Rate limiting»).
 
 Без `DATABASE_URL` бекенд працює, але історію не веде: прогнози повертаються з `"id": null`,
 а `/predictions` і `/stats` відповідають 503. Щоб увімкнути історію, підніміть лише базу з
@@ -272,7 +277,7 @@ docker compose up -d db
 # DATABASE_URL=postgresql+psycopg://brain_mri:<пароль>@127.0.0.1:5433/brain_mri
 cd backend
 alembic upgrade head
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000 --no-proxy-headers
 ```
 
 Інтерактивна документація API: <http://127.0.0.1:8000/docs>.
