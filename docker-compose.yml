@@ -1,6 +1,6 @@
-# Backend and Postgres for the prediction history.
-# Usage: copy .env.example to .env, set a password, then `docker compose up --build`.
-# The frontend is not part of this file yet; run it with `npm run dev` (see README).
+# The whole application: nginx with the built interface (frontend), the API and Postgres
+# for the prediction history. Usage: copy .env.example to .env, set a password, then
+# `docker compose up --build` and open http://localhost:8080.
 
 services:
   db:
@@ -66,7 +66,8 @@ services:
       ENABLE_DOCS: ${ENABLE_DOCS:-true}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,api}
       # Swagger UI at http://127.0.0.1:${API_PORT} sends that origin, so it follows API_PORT.
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:${API_PORT:-8000},http://127.0.0.1:${API_PORT:-8000}}
+      # The interface of the frontend service (port 8080) sends http://localhost:8080.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:${API_PORT:-8000},http://127.0.0.1:${API_PORT:-8000},http://localhost:8080,http://127.0.0.1:8080}
     volumes:
       - ./backend/models:/srv/models:ro
     # Bring the schema up to date, then start the server.
@@ -74,6 +75,37 @@ services:
     ports:
       # No authentication yet, so the API is published on localhost only.
       - "127.0.0.1:${API_PORT:-8000}:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The interface refuses larger files before sending them, like the API does.
+        VITE_MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
+    restart: unless-stopped
+    # nginx serving static files and forwarding the API paths needs little.
+    mem_limit: 128m
+    pids_limit: 64
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Nothing in the image is written to; nginx keeps its pid and temporary files in /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      # The interface, on this machine only, like the API.
+      - "127.0.0.1:8080:8080"
 
 volumes:
   pgdata:

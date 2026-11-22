@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config import Settings
+from app.config import DEFAULT_ALLOWED_ORIGINS, Settings
 from app.input_check import NotMriThresholds
 
 REPO_DIR = Path(__file__).resolve().parents[2]
@@ -252,3 +252,61 @@ def test_frontend_build_context_leaves_out_local_files():
     lines = set((FRONTEND_DIR / ".dockerignore").read_text(encoding="utf-8").splitlines())
 
     assert {"node_modules", "dist", ".env"} <= lines
+
+
+
+# --- Frontend service in Compose ------------------------------------------------
+
+FRONTEND_ORIGINS = {"http://localhost:8080", "http://127.0.0.1:8080"}
+
+
+def test_frontend_service_serves_the_ui_on_localhost_8080(services):
+    frontend = services["frontend"]
+
+    assert frontend["build"]["context"].replace("\\", "/").endswith("/frontend")
+    # The UI checks file sizes with the same limit the API enforces.
+    assert frontend["build"]["args"]["VITE_MAX_UPLOAD_MB"] == "10"
+    assert [(p["host_ip"], p["published"], p["target"]) for p in frontend["ports"]] == [
+        ("127.0.0.1", "8080", 8080)
+    ]
+    assert frontend["depends_on"]["api"]["condition"] == "service_healthy"
+    assert frontend["healthcheck"]["test"][0] == "CMD"
+
+
+def test_frontend_container_is_limited_and_read_only(services):
+    frontend = services["frontend"]
+
+    assert int(frontend["mem_limit"]) == 128 * MIB
+    assert 0 < frontend["pids_limit"] <= 100
+    assert frontend["cap_drop"] == ["ALL"]
+    assert frontend["security_opt"] == ["no-new-privileges:true"]
+    assert frontend["read_only"] is True
+    # nginx-unprivileged keeps its pid file and temporary files in /tmp.
+    assert any(entry.split(":")[0] == "/tmp" for entry in frontend["tmpfs"])
+
+
+def test_api_stays_on_localhost_8000_for_swagger_ui(services):
+    assert [(p["host_ip"], p["published"], p["target"]) for p in services["api"]["ports"]] == [
+        ("127.0.0.1", "8000", 8000)
+    ]
+
+
+def test_the_api_accepts_writes_from_the_frontend_page(services):
+    """The browser sends Origin http://localhost:8080 with POST and DELETE through nginx."""
+    origins = set(services["api"]["environment"]["ALLOWED_ORIGINS"].split(","))
+
+    assert FRONTEND_ORIGINS <= origins
+    # Vite, npm run preview and Swagger UI keep working too.
+    assert set(DEFAULT_ALLOWED_ORIGINS) <= origins
+
+
+def test_example_env_files_list_the_frontend_origins():
+    backend = (REPO_DIR / "backend" / ".env.example").read_text(encoding="utf-8")
+    root = (REPO_DIR / ".env.example").read_text(encoding="utf-8")
+    backend_line = re.search(r"^ALLOWED_ORIGINS=(.*)$", backend, re.MULTILINE)
+    # Commented out in the root file: Compose's default follows API_PORT.
+    root_line = re.search(r"^# ALLOWED_ORIGINS=(.*)$", root, re.MULTILINE)
+
+    for line in (backend_line, root_line):
+        assert line
+        assert FRONTEND_ORIGINS | set(DEFAULT_ALLOWED_ORIGINS) <= set(line.group(1).split(","))
