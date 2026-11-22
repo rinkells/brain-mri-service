@@ -288,6 +288,26 @@ def test_ipv6_clients_are_grouped_by_their_64_prefix(address, key):
     assert rate_limit_key(scope(PROXY, address), TRUSTED) == key
 
 
+@pytest.mark.parametrize(
+    "peer",
+    ["::ffff:172.30.250.10", "::FFFF:172.30.250.10", "0:0:0:0:0:ffff:ac1e:fa0a"],
+    ids=["mapped", "mapped-upper-case", "mapped-hex"],
+)
+def test_a_proxy_on_a_dual_stack_socket_is_still_trusted(peer):
+    """With `uvicorn --host ::` nginx connects as ::ffff:172.30.250.10."""
+    assert rate_limit_key(scope(peer, "203.0.113.9"), TRUSTED) == "203.0.113.9"
+
+
+def test_an_ipv4_mapped_x_real_ip_counts_as_the_ipv4_client():
+    assert rate_limit_key(scope(PROXY, "::ffff:203.0.113.9"), TRUSTED) == "203.0.113.9"
+
+
+def test_a_scoped_ipv6_proxy_is_trusted_without_its_zone():
+    trusted = frozenset({ipaddress.ip_address("fe80::10")})
+
+    assert rate_limit_key(scope("fe80::10%eth0", "203.0.113.9"), trusted) == "203.0.113.9"
+
+
 def test_a_peer_without_an_address_still_gets_a_key():
     assert rate_limit_key(scope("testclient"), TRUSTED) == "testclient"
     assert rate_limit_key(scope(None), TRUSTED) == "unknown"

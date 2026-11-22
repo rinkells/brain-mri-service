@@ -332,6 +332,12 @@ def test_rate_limits_are_read_from_the_environment(monkeypatch):
     assert settings.trusted_proxies == ["172.30.250.10", "2001:db8::1"]
 
 
+def test_an_ipv4_mapped_trusted_proxy_is_stored_as_ipv4(monkeypatch):
+    monkeypatch.setenv("TRUSTED_PROXIES", "::ffff:172.30.250.10")
+
+    assert load_settings().trusted_proxies == ["172.30.250.10"]
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     [

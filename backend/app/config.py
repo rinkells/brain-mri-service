@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.addresses import canonical_address
 from app.input_check import NotMriThresholds
 
 _NOT_MRI_DEFAULTS = NotMriThresholds()
@@ -147,7 +148,7 @@ class Settings(BaseSettings):
         checked = []
         for proxy in proxies:
             try:
-                checked.append(str(ipaddress.ip_address(proxy)))
+                checked.append(str(canonical_address(ipaddress.ip_address(proxy))))
             except ValueError as exc:
                 raise ValueError(f"{proxy!r} is not an IP address") from exc
         return checked

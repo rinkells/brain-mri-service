@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.addresses import IPAddress, parse_address
 from app.config import Settings
 from app.schemas import ErrorResponse
 
@@ -25,8 +26,6 @@ MAX_KEYS = 10_000
 IPV6_PREFIX = 64
 HEALTH_PATH = "/health"
 READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
 def too_many_requests_detail(seconds: int) -> str:
@@ -143,19 +142,8 @@ def bucket_of(method: str, path: str) -> str | None:
     return "write"
 
 
-def _parse_address(value: str | None) -> IPAddress | None:
-    if not value:
-        return None
-    try:
-        return ipaddress.ip_address(value.strip())
-    except ValueError:
-        return None
-
-
 def _address_key(address: IPAddress) -> str:
     if isinstance(address, ipaddress.IPv6Address):
-        if address.ipv4_mapped is not None:
-            return str(address.ipv4_mapped)
         return str(ipaddress.ip_network(f"{address}/{IPV6_PREFIX}", strict=False))
     return str(address)
 
@@ -167,13 +155,14 @@ def rate_limit_key(scope: Scope, trusted_proxies: frozenset[IPAddress]) -> str:
     peer of the connection; only when that peer is one of TRUSTED_PROXIES is the
     client taken from its X-Real-IP header. A header the proxy sends malformed (nginx
     never does) is ignored, and the request counts against the proxy's own address.
-    IPv6 clients are grouped by their /64 prefix.
+    IPv4-mapped addresses count as IPv4, and IPv6 clients are grouped by their /64 prefix.
     """
     client = scope.get("client")
     host = client[0] if client else None
-    address = _parse_address(host)
+    # Canonical first: on a dual-stack socket an IPv4 proxy connects as ::ffff:a.b.c.d.
+    address = parse_address(host)
     if address is not None and address in trusted_proxies:
-        forwarded = _parse_address(Headers(scope=scope).get("x-real-ip"))
+        forwarded = parse_address(Headers(scope=scope).get("x-real-ip"))
         if forwarded is not None:
             address = forwarded
     if address is None:
