@@ -21,7 +21,7 @@ from app.rate_limit import (
 from tests.helpers import encode_image, image_bytes, make_image
 
 PROXY = "172.30.250.10"  # the frontend container in Compose
-GATEWAY = "172.30.250.1"  # direct connections to the published API port
+GATEWAY = "172.30.250.128"  # direct connections to the published API port (seen in Compose)
 SCAN = image_bytes(512, 512)
 
 
