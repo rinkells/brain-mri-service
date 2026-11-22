@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import ipaddress
 import json
 import re
 import shutil
@@ -20,8 +21,8 @@ MIB = 1024 * 1024
 
 
 @pytest.fixture(scope="module")
-def services():
-    """The services as `docker compose config` resolves them; no container is started.
+def compose():
+    """The whole file as `docker compose config` resolves it; no container is started.
 
     The example env file is used, so a developer's real .env (and its password) is
     never read.
@@ -41,7 +42,12 @@ def services():
     ):
         pytest.skip("Docker Compose v2 is not installed")
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)["services"]
+    return json.loads(result.stdout)
+
+
+@pytest.fixture(scope="module")
+def services(compose):
+    return compose["services"]
 
 
 def test_api_container_is_limited(services):
@@ -310,3 +316,60 @@ def test_example_env_files_list_the_frontend_origins():
     for line in (backend_line, root_line):
         assert line
         assert FRONTEND_ORIGINS | set(DEFAULT_ALLOWED_ORIGINS) <= set(line.group(1).split(","))
+
+
+
+# --- Rate limiting and the client's address ----------------------------------------
+
+RATE_LIMIT_DEFAULTS = {
+    name.upper(): str(field.default).lower()
+    for name, field in Settings.model_fields.items()
+    if name.startswith("rate_limit_")
+}
+
+
+def test_nginx_sets_x_real_ip_itself():
+    """Whatever X-Real-IP the client sends is replaced by the address nginx sees."""
+    assert "proxy_set_header X-Real-IP $remote_addr;" in nginx_conf()
+
+
+def test_only_the_frontend_container_is_a_trusted_proxy(compose):
+    ipam = compose["networks"]["default"]["ipam"]["config"][0]
+    subnet = ipaddress.ip_network(ipam["subnet"])
+    dynamic = ipaddress.ip_network(ipam["ip_range"])
+    frontend = compose["services"]["frontend"]["networks"]["default"]["ipv4_address"]
+    trusted = compose["services"]["api"]["environment"]["TRUSTED_PROXIES"]
+
+    # A fixed address no other container can be given, and nothing else is trusted:
+    # direct connections to the published API port come from the gateway (.1).
+    assert ipaddress.ip_address(frontend) in subnet
+    assert dynamic.subnet_of(subnet) and ipaddress.ip_address(frontend) not in dynamic
+    assert trusted == frontend
+    assert str(next(subnet.hosts())) != frontend
+
+
+def test_rate_limits_reach_the_api_with_the_python_defaults(services):
+    environment = services["api"]["environment"]
+
+    assert set(RATE_LIMIT_DEFAULTS) == {
+        "RATE_LIMIT_ENABLED",
+        "RATE_LIMIT_PREDICT_PER_MINUTE",
+        "RATE_LIMIT_WRITE_PER_MINUTE",
+        "RATE_LIMIT_READ_PER_MINUTE",
+    }
+    assert {name: environment[name].lower() for name in RATE_LIMIT_DEFAULTS} == RATE_LIMIT_DEFAULTS
+
+
+def test_compose_falls_back_to_the_default_rate_limits():
+    text = (REPO_DIR / "docker-compose.yml").read_text(encoding="utf-8")
+    fallbacks = dict(re.findall(r"\$\{(RATE_LIMIT_[A-Z_]+):-([^}]*)\}", text))
+
+    assert {name: value.lower() for name, value in fallbacks.items()} == RATE_LIMIT_DEFAULTS
+
+
+@pytest.mark.parametrize("path", [".env.example", "backend/.env.example"])
+def test_example_env_files_hold_the_default_rate_limits(path):
+    lines = (REPO_DIR / path).read_text(encoding="utf-8").splitlines()
+    values = dict(line.split("=", 1) for line in lines if line.startswith("RATE_LIMIT_"))
+
+    assert {name: value.lower() for name, value in values.items()} == RATE_LIMIT_DEFAULTS
