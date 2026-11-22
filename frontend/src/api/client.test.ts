@@ -284,13 +284,14 @@ describe('too many requests (429)', () => {
       new ApiError('rate-limited', { status: 429, retryAfter: 37 }),
     )
 
+    // The title already says it; the text only says when to try again.
     expect(title).toBe('Забагато запитів')
-    expect(description).toBe('Забагато запитів. Спробуйте ще раз через 37 с.')
+    expect(description).toBe('Спробуйте ще раз через 37 с.')
   })
 
   test('still explains itself without the header', () => {
     expect(describeError(new ApiError('rate-limited', { status: 429 })).description).toBe(
-      'Забагато запитів. Спробуйте ще раз трохи згодом.',
+      'Спробуйте ще раз трохи згодом.',
     )
   })
 })

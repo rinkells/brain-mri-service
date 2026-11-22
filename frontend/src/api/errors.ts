@@ -99,8 +99,8 @@ export function describeError(error: unknown): ErrorDescription {
         title: 'Забагато запитів',
         description:
           error.retryAfter === undefined
-            ? 'Забагато запитів. Спробуйте ще раз трохи згодом.'
-            : `Забагато запитів. Спробуйте ще раз через ${error.retryAfter} с.`,
+            ? 'Спробуйте ще раз трохи згодом.'
+            : `Спробуйте ще раз через ${error.retryAfter} с.`,
       }
     case 'busy':
       return {
