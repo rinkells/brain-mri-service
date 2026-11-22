@@ -424,6 +424,23 @@ def test_the_host_check_comes_first_and_its_refusals_do_not_count(limited):
     assert browser.get("/stats").status_code == 429
 
 
+def test_a_cross_site_request_counts_for_nothing_and_never_reaches_the_model(limited):
+    """A page of another site in the user's browser cannot use up the shared limits."""
+    clock, model, queue, connect = limited(
+        rate_limit_read_per_minute=1, rate_limit_predict_per_minute=1
+    )
+    browser = connect()
+    foreign = {"Sec-Fetch-Site": "cross-site"}
+
+    assert [browser.get("/stats", headers=foreign).status_code for _ in range(5)] == [403] * 5
+    assert [post_scan(browser, **foreign).status_code for _ in range(5)] == [403] * 5
+    assert (model.calls, queue.entered) == (0, 0)
+    # The buckets are untouched: the first own request of each kind still passes.
+    assert browser.get("/stats").status_code == 503
+    assert post_scan(browser).status_code == 200
+    assert browser.get("/stats").status_code == 429
+
+
 def test_a_trusted_proxy_names_the_client(limited):
     clock, model, queue, connect = limited(
         rate_limit_predict_per_minute=1, trusted_proxies=[PROXY]

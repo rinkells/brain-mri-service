@@ -49,7 +49,11 @@ from app.schemas import (
     PredictionResponse,
     PredictionWarning,
 )
-from app.security import OriginCheckMiddleware, SecurityHeadersMiddleware
+from app.security import (
+    CrossSiteCheckMiddleware,
+    OriginCheckMiddleware,
+    SecurityHeadersMiddleware,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -359,13 +363,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiters = build_rate_limiters(settings)
     # The middleware added last runs first: the Host is checked, then the Origin, then
-    # the rate limit, and only then is the body read.
+    # whether a page of another site sent it, then the rate limit, and only then is the
+    # body read.
     app.add_middleware(
         MaxBodySizeMiddleware,
         max_bytes=settings.max_upload_bytes + MULTIPART_OVERHEAD_BYTES,
         detail=file_too_large_detail(settings),
     )
     app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(CrossSiteCheckMiddleware, allowed_origins=settings.allowed_origins)
     app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.allowed_origins)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
     # Outermost, so the refusals of the checks above get the headers too.
