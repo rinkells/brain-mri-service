@@ -16,6 +16,7 @@ from app.history import (
     list_predictions,
     well_formed_warnings,
 )
+from app.rate_limit import RATE_LIMITED_RESPONSE
 from app.records import PredictionRecord
 from app.schemas import (
     ErrorResponse,
@@ -52,7 +53,7 @@ def get_session(request: Request) -> Iterator[Session]:
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
-router = APIRouter(tags=["history"], responses=UNAVAILABLE_RESPONSE)
+router = APIRouter(tags=["history"], responses={**UNAVAILABLE_RESPONSE, **RATE_LIMITED_RESPONSE})
 
 
 def readable_warnings(record: PredictionRecord) -> list[PredictionWarning]:

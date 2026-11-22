@@ -26,6 +26,11 @@ ENV_VARS = (
     "NOT_MRI_LOWCONTRAST_STD",
     "NOT_MRI_DARK_MIN",
     "NOT_MRI_OPAQUE_MIN",
+    "RATE_LIMIT_ENABLED",
+    "RATE_LIMIT_PREDICT_PER_MINUTE",
+    "RATE_LIMIT_WRITE_PER_MINUTE",
+    "RATE_LIMIT_READ_PER_MINUTE",
+    "TRUSTED_PROXIES",
 )
 
 
@@ -291,3 +296,56 @@ def test_local_hosts_are_always_allowed(monkeypatch, value, expected):
     monkeypatch.setenv("ALLOWED_HOSTS", value)
 
     assert load_settings().allowed_hosts == expected
+
+
+# --- Rate limiting --------------------------------------------------------------
+
+
+def test_rate_limit_defaults():
+    settings = load_settings()
+
+    assert settings.rate_limit_enabled is True
+    assert (
+        settings.rate_limit_predict_per_minute,
+        settings.rate_limit_write_per_minute,
+        settings.rate_limit_read_per_minute,
+    ) == (10, 30, 120)
+    # Nobody may name the client by default: X-Real-IP is ignored.
+    assert settings.trusted_proxies == []
+
+
+def test_rate_limits_are_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("RATE_LIMIT_PREDICT_PER_MINUTE", "5")
+    monkeypatch.setenv("RATE_LIMIT_WRITE_PER_MINUTE", "6")
+    monkeypatch.setenv("RATE_LIMIT_READ_PER_MINUTE", "7")
+    monkeypatch.setenv("TRUSTED_PROXIES", "172.30.250.10, 2001:DB8::1")
+
+    settings = load_settings()
+
+    assert settings.rate_limit_enabled is False
+    assert (
+        settings.rate_limit_predict_per_minute,
+        settings.rate_limit_write_per_minute,
+        settings.rate_limit_read_per_minute,
+    ) == (5, 6, 7)
+    assert settings.trusted_proxies == ["172.30.250.10", "2001:db8::1"]
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("RATE_LIMIT_PREDICT_PER_MINUTE", "0"),
+        ("RATE_LIMIT_WRITE_PER_MINUTE", "-1"),
+        ("RATE_LIMIT_READ_PER_MINUTE", "many"),
+        ("RATE_LIMIT_ENABLED", "sometimes"),
+        # Addresses only: trusting a whole network would trust the gateway too.
+        ("TRUSTED_PROXIES", "172.30.250.0/24"),
+        ("TRUSTED_PROXIES", "frontend"),
+    ],
+)
+def test_invalid_rate_limit_settings_are_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError):
+        load_settings()

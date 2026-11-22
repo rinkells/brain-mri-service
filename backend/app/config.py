@@ -1,5 +1,6 @@
 """Service configuration, read from environment variables and an optional .env file."""
 
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal, get_args
@@ -60,8 +61,9 @@ class Settings(BaseSettings):
     """Settings taken from MODEL_PATH, MODEL_VERSION, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS,
     MAX_IMAGE_SIDE, MAX_CONCURRENT_INFERENCES, MAX_QUEUE, LOW_CONFIDENCE_THRESHOLD,
     NOT_MRI_COLOR_MAX, NOT_MRI_NOISE_MAX, NOT_MRI_STD_MIN, NOT_MRI_LOWCONTRAST_STD,
-    NOT_MRI_DARK_MIN, NOT_MRI_OPAQUE_MIN, DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS and
-    ENABLE_DOCS."""
+    NOT_MRI_DARK_MIN, NOT_MRI_OPAQUE_MIN, DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS,
+    ENABLE_DOCS, RATE_LIMIT_ENABLED, RATE_LIMIT_PREDICT_PER_MINUTE, RATE_LIMIT_WRITE_PER_MINUTE,
+    RATE_LIMIT_READ_PER_MINUTE and TRUSTED_PROXIES."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -114,8 +116,17 @@ class Settings(BaseSettings):
     )
     # Serve Swagger UI (/docs), ReDoc (/redoc) and the schema (/openapi.json).
     enable_docs: bool = True
+    # Requests per client in any 60 s: POST /predict, other writes (DELETE), reads (GET).
+    # Above the limit the API answers 429 with Retry-After; /health is never limited.
+    rate_limit_enabled: bool = True
+    rate_limit_predict_per_minute: int = Field(default=10, gt=0)
+    rate_limit_write_per_minute: int = Field(default=30, gt=0)
+    rate_limit_read_per_minute: int = Field(default=120, gt=0)
+    # Addresses of reverse proxies whose X-Real-IP header names the client (comma-separated).
+    # Empty: the header is ignored and the client is the peer of the connection.
+    trusted_proxies: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
-    @field_validator("allowed_hosts", "allowed_origins", mode="before")
+    @field_validator("allowed_hosts", "allowed_origins", "trusted_proxies", mode="before")
     @classmethod
     def _split_comma_separated(cls, value: object) -> object:
         return comma_separated(value)
@@ -127,6 +138,19 @@ class Settings(BaseSettings):
         if "*" in hosts:
             return hosts
         return hosts + [host for host in LOCAL_HOSTS if host not in hosts]
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _check_proxies(cls, proxies: list[str]) -> list[str]:
+        """Single addresses only: trusting a network would also trust its gateway, the
+        address direct connections to a published port come from."""
+        checked = []
+        for proxy in proxies:
+            try:
+                checked.append(str(ipaddress.ip_address(proxy)))
+            except ValueError as exc:
+                raise ValueError(f"{proxy!r} is not an IP address") from exc
+        return checked
 
     @field_validator("allowed_origins")
     @classmethod
@@ -151,6 +175,10 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return int(self.max_upload_mb * 1024 * 1024)
+
+    @property
+    def trusted_proxy_addresses(self) -> frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+        return frozenset(ipaddress.ip_address(proxy) for proxy in self.trusted_proxies)
 
     @property
     def not_mri_thresholds(self) -> NotMriThresholds:

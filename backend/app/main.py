@@ -34,6 +34,7 @@ from app.history_api import router as history_router
 from app.input_check import ImageFeatures, NotMriThresholds, compute_features, looks_not_mri
 from app.limiter import InferenceLimiter, ServiceBusyError
 from app.model import BrainMRIClassifier, Prediction
+from app.rate_limit import RATE_LIMITED_RESPONSE, RateLimitMiddleware, build_rate_limiters
 from app.preprocessing import (
     ImageTooLargeError,
     NotAnImageError,
@@ -121,6 +122,7 @@ ERROR_RESPONSES = {
             "чекають; заголовок Retry-After каже, через скільки секунд повторити"
         ),
     },
+    **RATE_LIMITED_RESPONSE,
 }
 
 
@@ -355,13 +357,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url="/openapi.json" if docs else None,
     )
     app.state.settings = settings
-    # The middleware added last runs first: the Host is checked, then the Origin,
-    # and only then is the body read.
+    app.state.rate_limiters = build_rate_limiters(settings)
+    # The middleware added last runs first: the Host is checked, then the Origin, then
+    # the rate limit, and only then is the body read.
     app.add_middleware(
         MaxBodySizeMiddleware,
         max_bytes=settings.max_upload_bytes + MULTIPART_OVERHEAD_BYTES,
         detail=file_too_large_detail(settings),
     )
+    app.add_middleware(RateLimitMiddleware)
     app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.allowed_origins)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
     # Outermost, so the refusals of the checks above get the headers too.
