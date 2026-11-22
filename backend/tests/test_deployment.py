@@ -340,12 +340,12 @@ def test_only_the_frontend_container_is_a_trusted_proxy(compose):
     frontend = compose["services"]["frontend"]["networks"]["default"]["ipv4_address"]
     trusted = compose["services"]["api"]["environment"]["TRUSTED_PROXIES"]
 
-    # A fixed address no other container can be given, and nothing else is trusted:
-    # direct connections to the published API port come from the gateway (.1).
+    # A fixed address outside ip_range, and nothing else is trusted. With ip_range set,
+    # Docker takes the gateway from that range too (172.30.250.128, seen under Docker
+    # Desktop), and direct connections to the published API port come from the gateway.
     assert ipaddress.ip_address(frontend) in subnet
     assert dynamic.subnet_of(subnet) and ipaddress.ip_address(frontend) not in dynamic
     assert trusted == frontend
-    assert str(next(subnet.hosts())) != frontend
 
 
 def test_rate_limits_reach_the_api_with_the_python_defaults(services):

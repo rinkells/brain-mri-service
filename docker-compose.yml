@@ -69,7 +69,8 @@ services:
       RATE_LIMIT_WRITE_PER_MINUTE: ${RATE_LIMIT_WRITE_PER_MINUTE:-30}
       RATE_LIMIT_READ_PER_MINUTE: ${RATE_LIMIT_READ_PER_MINUTE:-120}
       # Only nginx of the frontend service may name the client (X-Real-IP). Not the whole
-      # network: direct connections to the published port 8000 come from its gateway.
+      # network: direct connections to the published port 8000 come from its gateway,
+      # which Docker takes from ip_range below (172.30.250.128).
       TRUSTED_PROXIES: 172.30.250.10
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,api}
       # Swagger UI at http://127.0.0.1:${API_PORT} sends that origin, so it follows API_PORT.
@@ -129,5 +130,6 @@ networks:
         # If this clashes with another network on the machine, change the subnet, the
         # address of frontend and TRUSTED_PROXIES of api together.
         - subnet: 172.30.250.0/24
-          # Addresses handed out to the other containers: outside it sits the fixed one.
+          # The gateway and the other containers get addresses from here; the fixed
+          # address of frontend lies outside it.
           ip_range: 172.30.250.128/25
