@@ -128,6 +128,21 @@ def test_docker_healthcheck_passes_the_host_check(client):
     assert client.get(parts.path, headers={"Host": parts.netloc}).status_code == 200
 
 
+def test_docker_healthcheck_passes_whatever_allowed_hosts_says(settings):
+    """The healthcheck asks 127.0.0.1 even when ALLOWED_HOSTS names only a public host."""
+    dockerfile = (BACKEND_DIR / "Dockerfile").read_text(encoding="utf-8")
+    url = re.search(r"HEALTHCHECK.*?urlopen\('([^']+)'", dockerfile, re.DOTALL).group(1)
+    parts = urlsplit(url)
+    values = {**settings.model_dump(), "allowed_hosts": ["mri.example"]}
+    public_only = Settings(_env_file=None, **values)
+
+    with TestClient(create_app(public_only)) as client:
+        assert client.get(parts.path, headers={"Host": parts.netloc}).status_code == 200
+        assert client.get("/health", headers={"Host": "localhost:8000"}).status_code == 200
+        assert client.get("/health", headers={"Host": "mri.example"}).status_code == 200
+        assert client.get("/health", headers={"Host": "evil.example"}).status_code == 400
+
+
 def test_ui_through_the_vite_dev_proxy(history_client):
     """The browser talks to Vite on port 5173. Vite forwards /health, /predict and
     /predictions with the browser's Host and Origin (changeOrigin is not set)."""

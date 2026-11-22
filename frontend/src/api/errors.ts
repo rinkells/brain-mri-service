@@ -1,5 +1,7 @@
 export type ApiErrorKind =
   | 'invalid-image' // 400
+  | 'host-not-allowed' // 400 "Invalid host header": the address is not in ALLOWED_HOSTS
+  | 'origin-not-allowed' // 403: this page's origin is not in ALLOWED_ORIGINS
   | 'not-found' // 404
   | 'too-large' // 413
   | 'unsupported-format' // 415
@@ -44,6 +46,21 @@ export function describeError(error: unknown): ErrorDescription {
         title: 'Файл не вдалося прочитати',
         description:
           error.detail ?? 'Сервер не розпізнав файл як зображення. Можливо, файл пошкоджений.',
+      }
+    case 'host-not-allowed':
+      return {
+        title: 'Адресу сервера не дозволено',
+        description:
+          'Сервер не відповідає на адресу, за якою відкрито інтерфейс. Відкрийте його через ' +
+          'localhost або додайте цю адресу до ALLOWED_HOSTS у налаштуваннях сервера.',
+      }
+    case 'origin-not-allowed':
+      return {
+        title: 'Цій сторінці заборонено надсилати запити',
+        description:
+          'Сервер приймає аналіз і видалення лише зі сторінок, перелічених в ALLOWED_ORIGINS. ' +
+          'Відкрийте інтерфейс за дозволеною адресою (типово http://localhost:5173) або ' +
+          'додайте адресу цієї сторінки до ALLOWED_ORIGINS у налаштуваннях сервера.',
       }
     case 'not-found':
       return {

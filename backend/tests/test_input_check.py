@@ -189,6 +189,8 @@ def features(**changes) -> ImageFeatures:
         ({"std": 29.999, "dark_share": 0.1499}, True),
         ({"std": 12.0, "dark_share": 0.6}, False),
         ({"std": 0.0, "noise": None, "dark_share": 1.0}, True),
+        ({"opaque_share": 0.99}, False),
+        ({"opaque_share": 0.9899}, True),
     ],
     ids=[
         "scan-like",
@@ -204,6 +206,8 @@ def features(**changes) -> ImageFeatures:
         "low-contrast-dark-below",
         "low-contrast-but-dark-background",
         "solid-frame-without-noise",
+        "opaque-at-threshold",
+        "opaque-below",
     ],
 )
 def test_thresholds_are_strict(changes, flagged):
@@ -212,13 +216,18 @@ def test_thresholds_are_strict(changes, flagged):
 
 def test_default_thresholds():
     assert DEFAULTS == NotMriThresholds(
-        color_max=7.0, noise_max=0.85, std_min=10.0, lowcontrast_std=30.0, dark_min=0.15
+        color_max=7.0,
+        noise_max=0.85,
+        std_min=10.0,
+        lowcontrast_std=30.0,
+        dark_min=0.15,
+        opaque_min=0.99,
     )
 
 
 def test_other_thresholds_are_used():
     lenient = NotMriThresholds(
-        color_max=255, noise_max=math.inf, std_min=0, lowcontrast_std=0, dark_min=0
+        color_max=255, noise_max=math.inf, std_min=0, lowcontrast_std=0, dark_min=0, opaque_min=0
     )
 
     assert not looks_not_mri(features(color=200.0, noise=1.2), lenient)

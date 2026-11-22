@@ -391,10 +391,14 @@ describe('deleting a record', () => {
           history.remove(id)
           return new Response(null, { status: 204 })
         }
-        return jsonResponse({ detail: 'Прогноз не знайдено.' }, deleteStatus)
+        const detail =
+          deleteStatus === 404
+            ? 'Прогноз не знайдено.'
+            : 'База даних недоступна. Спробуйте пізніше.'
+        return jsonResponse({ detail }, deleteStatus)
       },
     })
-    return { fetchMock, user: userEvent.setup() }
+    return { fetchMock, history, user: userEvent.setup() }
   }
 
   test('asks for confirmation, deletes and refreshes the list and statistics', async () => {
@@ -444,6 +448,102 @@ describe('deleting a record', () => {
     await user.click(screen.getByRole('button', { name: 'Так' }))
 
     expect(await screen.findByText('Показано 1–10 з 10')).toBeInTheDocument()
+  })
+
+  test('the deleted row cannot be deleted again while the list reloads', async () => {
+    const records = newestFirst(2)
+    const history = serveHistory(records)
+    let holdList = false
+    let releaseList = () => {}
+    mockApi({
+      predictions: async (url) => {
+        if (holdList) {
+          await new Promise<void>((resolve) => (releaseList = resolve))
+        }
+        return history.handler(url)
+      },
+      stats: () => jsonResponse(makeStats()),
+      deletePrediction: (url) => {
+        history.remove(url.split('/').at(-1)!)
+        return new Response(null, { status: 204 })
+      },
+    })
+    const user = userEvent.setup()
+    render(<HistoryPage />)
+    await screen.findByText('Показано 1–2 з 2')
+    const name = `Видалити запис від ${formatDateTime(records[0].created_at)}`
+
+    holdList = true
+    await user.click(screen.getByRole('button', { name }))
+    await user.click(screen.getByRole('button', { name: 'Так' }))
+
+    // The DELETE is done, the new list is not here yet: the old row is still shown.
+    await waitFor(() => expect(screen.getByRole('button', { name })).toBeDisabled())
+    const other = `Видалити запис від ${formatDateTime(records[1].created_at)}`
+    expect(screen.getByRole('button', { name: other })).toBeEnabled()
+
+    holdList = false
+    releaseList()
+    expect(await screen.findByText('Показано 1–1 з 1')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+  })
+
+  test('a failed delete stays on the page of the record', async () => {
+    const records = newestFirst(11)
+    const { user } = setup(records, 503)
+    render(<HistoryPage />)
+    await screen.findByText('Показано 1–10 з 11')
+    await user.click(screen.getByRole('button', { name: 'Наступна' }))
+    await screen.findByText('Показано 11–11 з 11')
+
+    await user.click(screen.getByRole('button', { name: /^Видалити запис від/ }))
+    await user.click(screen.getByRole('button', { name: 'Так' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Історія недоступна')
+    expect(await screen.findByText('Показано 11–11 з 11')).toBeInTheDocument()
+    expect(screen.queryByText('Показано 1–10 з 11')).not.toBeInTheDocument()
+  })
+
+  test('a delete error goes away on another page', async () => {
+    const records = newestFirst(11)
+    const { user } = setup(records, 404)
+    render(<HistoryPage />)
+    await screen.findByText('Показано 1–10 з 11')
+
+    await user.click(
+      screen.getByRole('button', {
+        name: `Видалити запис від ${formatDateTime(records[0].created_at)}`,
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Так' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Запис не знайдено')
+
+    await user.click(screen.getByRole('button', { name: 'Наступна' }))
+
+    expect(await screen.findByText('Показано 11–11 з 11')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  test('when records vanish in another tab, the last page that exists is shown', async () => {
+    const records = newestFirst(21)
+    const { history, user } = setup(records, 404)
+    render(<HistoryPage />)
+    await screen.findByText('Показано 1–10 з 21')
+    await user.click(screen.getByRole('button', { name: 'Наступна' }))
+    await screen.findByText('Показано 11–20 з 21')
+    await user.click(screen.getByRole('button', { name: 'Наступна' }))
+    await screen.findByText('Показано 21–21 з 21')
+
+    // Another tab deletes the only record of page 3; this tab still shows it.
+    history.remove(records[20].id)
+    await user.click(screen.getByRole('button', { name: /^Видалити запис від/ }))
+    await user.click(screen.getByRole('button', { name: 'Так' }))
+
+    expect(await screen.findByText('Показано 11–20 з 20')).toBeInTheDocument()
+    // The pager moves first; the rows of page 2 follow when they arrive.
+    await waitFor(() => expect(rows()).toHaveLength(10))
+    expect(screen.queryByText(/Показано 21–20/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Історія порожня/)).not.toBeInTheDocument()
   })
 
   test('a record that is already gone is reported and the list is refreshed', async () => {

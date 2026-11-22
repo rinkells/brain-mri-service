@@ -25,6 +25,7 @@ ENV_VARS = (
     "NOT_MRI_STD_MIN",
     "NOT_MRI_LOWCONTRAST_STD",
     "NOT_MRI_DARK_MIN",
+    "NOT_MRI_OPAQUE_MIN",
 )
 
 
@@ -175,7 +176,8 @@ def test_hosts_and_origins_are_comma_separated(monkeypatch):
 
     settings = load_settings()
 
-    assert settings.allowed_hosts == ["mri.example", "10.0.0.5"]
+    # localhost and 127.0.0.1 are always added: the container healthcheck uses them.
+    assert settings.allowed_hosts == ["mri.example", "10.0.0.5", "localhost", "127.0.0.1"]
     assert settings.allowed_origins == ["https://mri.example", "http://10.0.0.5:8080"]
 
 
@@ -214,7 +216,12 @@ def test_enable_docs(monkeypatch):
 
 def test_not_mri_thresholds_default_to_the_measured_values():
     assert load_settings().not_mri_thresholds == NotMriThresholds(
-        color_max=7.0, noise_max=0.85, std_min=10.0, lowcontrast_std=30.0, dark_min=0.15
+        color_max=7.0,
+        noise_max=0.85,
+        std_min=10.0,
+        lowcontrast_std=30.0,
+        dark_min=0.15,
+        opaque_min=0.99,
     )
 
 
@@ -224,9 +231,15 @@ def test_not_mri_thresholds_are_read_from_the_environment(monkeypatch):
     monkeypatch.setenv("NOT_MRI_STD_MIN", "5")
     monkeypatch.setenv("NOT_MRI_LOWCONTRAST_STD", "25")
     monkeypatch.setenv("NOT_MRI_DARK_MIN", "0.2")
+    monkeypatch.setenv("NOT_MRI_OPAQUE_MIN", "0.95")
 
     assert load_settings().not_mri_thresholds == NotMriThresholds(
-        color_max=12.5, noise_max=0.9, std_min=5.0, lowcontrast_std=25.0, dark_min=0.2
+        color_max=12.5,
+        noise_max=0.9,
+        std_min=5.0,
+        lowcontrast_std=25.0,
+        dark_min=0.2,
+        opaque_min=0.95,
     )
 
 
@@ -238,11 +251,16 @@ def test_not_mri_thresholds_are_read_from_the_environment(monkeypatch):
         ("NOT_MRI_NOISE_MAX", "-0.1"),
         ("NOT_MRI_STD_MIN", "-1"),
         ("NOT_MRI_STD_MIN", "256"),
+        # The brightness std of 0..255 values is at most 127.5: more would flag every scan.
+        ("NOT_MRI_STD_MIN", "128"),
         ("NOT_MRI_LOWCONTRAST_STD", "-1"),
         ("NOT_MRI_LOWCONTRAST_STD", "256"),
+        ("NOT_MRI_LOWCONTRAST_STD", "128"),
         ("NOT_MRI_DARK_MIN", "-0.1"),
         ("NOT_MRI_DARK_MIN", "1.5"),
         ("NOT_MRI_DARK_MIN", "some"),
+        ("NOT_MRI_OPAQUE_MIN", "-0.1"),
+        ("NOT_MRI_OPAQUE_MIN", "1.5"),
     ],
 )
 def test_invalid_not_mri_thresholds_are_rejected(monkeypatch, name, value):
@@ -250,3 +268,26 @@ def test_invalid_not_mri_thresholds_are_rejected(monkeypatch, name, value):
 
     with pytest.raises(ValidationError):
         load_settings()
+
+
+def test_std_thresholds_reach_the_largest_possible_std(monkeypatch):
+    monkeypatch.setenv("NOT_MRI_STD_MIN", "127.5")
+    monkeypatch.setenv("NOT_MRI_LOWCONTRAST_STD", "127.5")
+
+    thresholds = load_settings().not_mri_thresholds
+
+    assert (thresholds.std_min, thresholds.lowcontrast_std) == (127.5, 127.5)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("127.0.0.1", ["127.0.0.1", "localhost"]),
+        ("LOCALHOST,api", ["localhost", "api", "127.0.0.1"]),
+        ("*", ["*"]),
+    ],
+)
+def test_local_hosts_are_always_allowed(monkeypatch, value, expected):
+    monkeypatch.setenv("ALLOWED_HOSTS", value)
+
+    assert load_settings().allowed_hosts == expected

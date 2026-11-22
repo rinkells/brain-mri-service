@@ -62,6 +62,7 @@ services:
       NOT_MRI_STD_MIN: ${NOT_MRI_STD_MIN:-10}
       NOT_MRI_LOWCONTRAST_STD: ${NOT_MRI_LOWCONTRAST_STD:-30}
       NOT_MRI_DARK_MIN: ${NOT_MRI_DARK_MIN:-0.15}
+      NOT_MRI_OPAQUE_MIN: ${NOT_MRI_OPAQUE_MIN:-0.99}
       ENABLE_DOCS: ${ENABLE_DOCS:-true}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,api}
       # Swagger UI at http://127.0.0.1:${API_PORT} sends that origin, so it follows API_PORT.

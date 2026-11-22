@@ -26,22 +26,37 @@ export function HistoryPage() {
   const stats = useStats(reloadToken)
   const page = history.data
 
+  // Records removed elsewhere (another tab) can leave this page past the end of the list:
+  // go to the last page that still exists. Only fresh data for this very page counts.
+  if (page && !history.loading && page.offset === offset && offset > 0 && offset >= page.total) {
+    setOffset(Math.max(0, Math.ceil(page.total / HISTORY_PAGE_SIZE) - 1) * HISTORY_PAGE_SIZE)
+  }
+
   function changeFilter(value: ClassName | '') {
     setClassFilter(value)
     setOffset(0)
     setDeleteError(null)
   }
 
+  function changePage(next: number) {
+    setOffset(next)
+    // An error about a record on the previous page would be out of place here.
+    setDeleteError(null)
+  }
+
   async function handleDelete(id: string) {
     setDeleteError(null)
+    let deleted = false
     try {
       await deletePrediction(id)
+      deleted = true
     } catch (error) {
       // A 404 means it is already gone; reloading below shows the current state anyway.
       setDeleteError(error)
     }
-    // Step back when the last record of a later page was removed.
-    if (page && page.items.length === 1 && offset > 0) {
+    // Step back when the last record of a later page was removed. After a failure the
+    // record is still there, so the page stays.
+    if (deleted && page && page.items.length === 1 && offset > 0) {
       setOffset(Math.max(0, offset - HISTORY_PAGE_SIZE))
     }
     setReloadToken((token) => token + 1)
@@ -100,7 +115,7 @@ export function HistoryPage() {
             offset={offset}
             limit={HISTORY_PAGE_SIZE}
             disabled={history.loading}
-            onChange={setOffset}
+            onChange={changePage}
           />
         )}
       </section>

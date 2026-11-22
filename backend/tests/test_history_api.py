@@ -14,7 +14,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
 from app.database import Base, Database, create_db_engine
-from app.history import compute_stats
+from app.history import compute_stats, save_prediction
 from app.records import PredictionRecord
 from tests.conftest import MODEL_VERSION
 from tests.helpers import encode_image, image_bytes, make_record
@@ -667,6 +667,34 @@ def test_saving_is_retried_after_the_pause(use_database, database):
 
     database.saving_paused_until = time.monotonic() - 1  # the pause is over
     assert post_scan(client).json()["id"] is not None
+
+
+def test_a_record_the_database_rejects_does_not_pause_saving(database, caplog):
+    """Bad data in one record says nothing about the database: the next record is saved."""
+    rejected = make_record(predicted_class="astrocytoma")  # violates the CHECK constraint
+
+    assert save_prediction(database, rejected) is None
+    assert database.saving_paused_until == 0
+    assert "rejected the prediction" in caplog.text
+    assert save_prediction(database, make_record()) is not None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OperationalError("INSERT", {}, Exception("connection refused")),
+        SQLAlchemyTimeoutError("QueuePool limit of size 5 overflow 10 reached"),
+    ],
+    ids=["unreachable", "pool-timeout"],
+)
+def test_an_unavailable_database_pauses_saving(database, monkeypatch, error):
+    def fail(self):
+        raise error
+
+    monkeypatch.setattr(Session, "commit", fail)
+
+    assert save_prediction(database, make_record()) is None
+    assert database.saving_paused_until > time.monotonic()
 
 
 def test_history_keeps_class_order_of_probabilities(history_client, database):

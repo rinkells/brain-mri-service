@@ -11,6 +11,8 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from app.input_check import NotMriThresholds
 
 _NOT_MRI_DEFAULTS = NotMriThresholds()
+# Largest possible standard deviation of brightness values from 0 to 255.
+MAX_STD = 127.5
 
 ClassName = Literal["glioma", "meningioma", "notumor", "pituitary"]
 
@@ -36,6 +38,10 @@ DEFAULT_MAX_IMAGE_SIDE = 4096
 
 # Host headers the API answers to: this machine, and "api", the service name in Compose.
 DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "api")
+# Always allowed, whatever ALLOWED_HOSTS says: the container healthcheck asks 127.0.0.1.
+# This does not weaken the DNS rebinding check: a rebinding attack arrives with the
+# attacker's host name in the Host header, never with these.
+LOCAL_HOSTS = ("localhost", "127.0.0.1")
 # Pages that may send POST and DELETE: the Vite dev server (5173), `npm run preview`
 # (4173) and Swagger UI served by the API itself (8000).
 DEFAULT_ALLOWED_ORIGINS = tuple(
@@ -54,7 +60,8 @@ class Settings(BaseSettings):
     """Settings taken from MODEL_PATH, MODEL_VERSION, DEVICE, MAX_UPLOAD_MB, MAX_PIXELS,
     MAX_IMAGE_SIDE, MAX_CONCURRENT_INFERENCES, MAX_QUEUE, LOW_CONFIDENCE_THRESHOLD,
     NOT_MRI_COLOR_MAX, NOT_MRI_NOISE_MAX, NOT_MRI_STD_MIN, NOT_MRI_LOWCONTRAST_STD,
-    NOT_MRI_DARK_MIN, DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS and ENABLE_DOCS."""
+    NOT_MRI_DARK_MIN, NOT_MRI_OPAQUE_MIN, DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS and
+    ENABLE_DOCS."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -83,16 +90,20 @@ class Settings(BaseSettings):
     # or std < NOT_MRI_LOWCONTRAST_STD together with a dark share < NOT_MRI_DARK_MIN.
     not_mri_color_max: float = Field(default=_NOT_MRI_DEFAULTS.color_max, ge=0, le=255)
     not_mri_noise_max: float = Field(default=_NOT_MRI_DEFAULTS.noise_max, ge=0)
-    not_mri_std_min: float = Field(default=_NOT_MRI_DEFAULTS.std_min, ge=0, le=255)
+    # The std of brightness values from 0 to 255 is at most 127.5, so a higher threshold
+    # would flag every scan.
+    not_mri_std_min: float = Field(default=_NOT_MRI_DEFAULTS.std_min, ge=0, le=MAX_STD)
     not_mri_lowcontrast_std: float = Field(
-        default=_NOT_MRI_DEFAULTS.lowcontrast_std, ge=0, le=255
+        default=_NOT_MRI_DEFAULTS.lowcontrast_std, ge=0, le=MAX_STD
     )
     not_mri_dark_min: float = Field(default=_NOT_MRI_DEFAULTS.dark_min, ge=0, le=1)
+    # ... or when the share of fully opaque pixels is below NOT_MRI_OPAQUE_MIN.
+    not_mri_opaque_min: float = Field(default=_NOT_MRI_DEFAULTS.opaque_min, ge=0, le=1)
     # SQLAlchemy URL of the prediction history, e.g.
     # postgresql+psycopg://user:password@localhost:5432/brain_mri.
     # Without it the service still predicts, but keeps no history.
     database_url: str | None = None
-    # Host headers to answer; others get 400. "*" allows any host.
+    # Host headers to answer; others get 400. "*" allows any host. LOCAL_HOSTS are added.
     allowed_hosts: Annotated[list[str], NoDecode] = Field(
         default=list(DEFAULT_ALLOWED_HOSTS), min_length=1
     )
@@ -112,7 +123,10 @@ class Settings(BaseSettings):
     @field_validator("allowed_hosts")
     @classmethod
     def _normalise_hosts(cls, hosts: list[str]) -> list[str]:
-        return [host.lower() for host in hosts]
+        hosts = [host.lower() for host in hosts]
+        if "*" in hosts:
+            return hosts
+        return hosts + [host for host in LOCAL_HOSTS if host not in hosts]
 
     @field_validator("allowed_origins")
     @classmethod
@@ -146,6 +160,7 @@ class Settings(BaseSettings):
             std_min=self.not_mri_std_min,
             lowcontrast_std=self.not_mri_lowcontrast_std,
             dark_min=self.not_mri_dark_min,
+            opaque_min=self.not_mri_opaque_min,
         )
 
 

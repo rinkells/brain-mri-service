@@ -47,6 +47,25 @@ describe('validateImageFile', () => {
     expect(message).toContain('Максимум — 10 МБ')
   })
 
+  test.each([
+    // Just over 10 MB: one decimal would say "10 МБ", the same as the limit.
+    [10_490_000, 'Файл завеликий (10,004 МБ). Максимум — 10 МБ.'],
+    [11 * 1024 * 1024, 'Файл завеликий (11 МБ). Максимум — 10 МБ.'],
+    // Even three decimals look like the limit: the exact size in bytes.
+    [
+      MAX_UPLOAD_BYTES + 1,
+      `Файл завеликий (${new Intl.NumberFormat('uk-UA').format(MAX_UPLOAD_BYTES + 1)} Б). Максимум — 10 МБ.`,
+    ],
+  ])('never shows a file over the limit as the same size as the limit: %i bytes', (size, text) => {
+    expect(validateImageFile(makeFile('a.png', 'image/png', size))).toBe(text)
+  })
+
+  test('shows a file under 1 MB in kilobytes against a small limit', () => {
+    expect(validateImageFile(makeFile('a.png', 'image/png', 600 * 1024), 512 * 1024)).toBe(
+      'Файл завеликий (600 КБ). Максимум — 0,5 МБ.',
+    )
+  })
+
   test('uses the given limit', () => {
     expect(validateImageFile(makeFile('a.png', 'image/png', 2 * 1024 * 1024), 1024 * 1024)).toBe(
       'Файл завеликий (2 МБ). Максимум — 1 МБ.',

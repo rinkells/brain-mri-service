@@ -323,6 +323,37 @@ def test_grey_noise_still_gets_not_mri_like(client):
     assert "not_mri_like" in codes(response)
 
 
+def with_transparent_strips(pixels: np.ndarray, width: int = 60) -> bytes:
+    """An RGBA PNG whose left and right `width` columns are fully transparent."""
+    alpha = np.full(pixels.shape[:2], 255, dtype=np.uint8)
+    alpha[:, :width] = 0
+    alpha[:, -width:] = 0
+    rgb = np.dstack([pixels] * 3) if pixels.ndim == 2 else pixels
+    return encode_image(Image.fromarray(np.dstack([rgb, alpha]), mode="RGBA"))
+
+
+def dull_grey_noise() -> np.ndarray:
+    noise = np.random.default_rng(0).normal(128, 15, (512, 512))
+    return np.clip(noise, 0, 255).astype(np.uint8)
+
+
+def test_transparent_strips_do_not_hide_a_non_scan(client):
+    """Transparent pixels become black, a fake dark background: the review's example."""
+    opaque = post_image(client, encode_image(Image.fromarray(dull_grey_noise())))
+    with_strips = post_image(client, with_transparent_strips(dull_grey_noise()))
+
+    assert "not_mri_like" in codes(opaque)
+    assert with_strips.status_code == 200
+    assert "not_mri_like" in codes(with_strips)
+
+
+def test_scan_with_transparent_strips_gets_not_mri_like(client):
+    scan = np.asarray(make_image(512, 512))
+
+    assert "not_mri_like" in codes(post_image(client, with_transparent_strips(scan)))
+    assert "not_mri_like" not in codes(post_image(client, encode_image(Image.fromarray(scan))))
+
+
 def test_not_mri_thresholds_are_taken_from_settings(with_top_probability, settings):
     client = with_top_probability(0.99)
     client.app.state.settings = settings.model_copy(

@@ -385,3 +385,34 @@ def test_decode_upload_tells_whether_the_file_is_grey(data, grey):
         # The promise behind the flag: no pixel has any colour.
         r, g, b = np.asarray(decoded.image).transpose(2, 0, 1)
         assert np.array_equal(r, g) and np.array_equal(g, b)
+
+
+# --- Transparency -------------------------------------------------------------
+
+
+def with_alpha(alpha: np.ndarray) -> bytes:
+    scan = np.asarray(make_image(512, 512, "RGB"))
+    return encode_image(Image.fromarray(np.dstack([scan, alpha]), mode="RGBA"))
+
+
+def side_strips(width: int) -> np.ndarray:
+    alpha = np.full((512, 512), 255, dtype=np.uint8)
+    alpha[:, :width] = 0
+    alpha[:, 512 - width :] = 0
+    return alpha
+
+
+@pytest.mark.parametrize(
+    ("data", "share"),
+    [
+        (image_bytes(64, 64, "PNG", "RGB"), 1.0),
+        (image_bytes(64, 64, "JPEG", "L"), 1.0),
+        (with_alpha(np.full((512, 512), 255, dtype=np.uint8)), 1.0),
+        (with_alpha(side_strips(60)), (512 - 120) / 512),
+        # Half transparent counts as not opaque.
+        (grey_with_alpha_png(), 0.0),
+    ],
+    ids=["rgb", "grey-jpeg", "rgba-opaque", "rgba-60px-strips", "la-half-transparent"],
+)
+def test_decode_upload_measures_the_share_of_opaque_pixels(data, share):
+    assert decode_upload(data, MAX_PIXELS).opaque_share == pytest.approx(share)
