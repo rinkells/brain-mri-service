@@ -6,6 +6,7 @@ export type ApiErrorKind =
   | 'too-large' // 413
   | 'unsupported-format' // 415
   | 'validation' // 422
+  | 'rate-limited' // 429: too many requests from this address in the last minute
   | 'busy' // 503 from /predict: too many scans are being analysed
   | 'database-unavailable' // 503 from the history: it is disabled or its database is down
   | 'unavailable' // no connection, or the dev proxy could not reach the backend
@@ -16,13 +17,19 @@ export class ApiError extends Error {
   readonly status?: number
   /** The backend's own explanation, when it sent one as text. */
   readonly detail?: string
+  /** Seconds to wait before trying again (Retry-After of a 429), when it was given. */
+  readonly retryAfter?: number
 
-  constructor(kind: ApiErrorKind, options: { status?: number; detail?: string } = {}) {
+  constructor(
+    kind: ApiErrorKind,
+    options: { status?: number; detail?: string; retryAfter?: number } = {},
+  ) {
     super(options.detail ?? `API error: ${kind}`)
     this.name = 'ApiError'
     this.kind = kind
     this.status = options.status
     this.detail = options.detail
+    this.retryAfter = options.retryAfter
   }
 }
 
@@ -86,6 +93,14 @@ export function describeError(error: unknown): ErrorDescription {
       return {
         title: 'Сервер не прийняв запит',
         description: 'Запит сформовано неправильно. Оберіть файл ще раз і повторіть спробу.',
+      }
+    case 'rate-limited':
+      return {
+        title: 'Забагато запитів',
+        description:
+          error.retryAfter === undefined
+            ? 'Забагато запитів. Спробуйте ще раз трохи згодом.'
+            : `Забагато запитів. Спробуйте ще раз через ${error.retryAfter} с.`,
       }
     case 'busy':
       return {
