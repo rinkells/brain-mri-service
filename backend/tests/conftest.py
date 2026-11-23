@@ -9,14 +9,18 @@ the test model confident, as the trained one is on most scans. Tests of the
 warning itself replace the model with a stand-in (see test_api.py).
 """
 
+import argon2
 import pytest
 import torch
 from fastapi.testclient import TestClient
 from torchvision.models import resnet18
 
+from app.auth import start_session
 from app.config import CLASS_NAMES, Settings
 from app.database import Base, Database
 from app.main import create_app
+from app.rate_limit import build_login_failures
+from tests.helpers import OWNER_ID, OWNER_NAME, TEST_PASSWORD, add_user, new_browser
 
 MAX_UPLOAD_MB = 1
 MAX_PIXELS = 1_000_000
@@ -76,19 +80,52 @@ def client(settings):
 
 @pytest.fixture
 def use_database(client):
-    """Point the shared app at another history database for one test."""
+    """Point the shared app at another history database for one test.
+
+    Failed sign-ins are counted afresh too: unlike the rate limit, that limit is on in
+    the shared app, and the counts of one test must not reach the next.
+    """
     app = client.app
-    previous = app.state.database
+    previous = (app.state.database, app.state.login_failures)
 
     def use(database):
         app.state.database = database
+        app.state.login_failures = build_login_failures(app.state.settings)
         return client
 
     yield use
-    app.state.database = previous
+    app.state.database, app.state.login_failures = previous
+
+
+@pytest.fixture(scope="session")
+def password_hash():
+    """One argon2id hash of TEST_PASSWORD for every user the fixtures create (~0.1 s each)."""
+    return argon2.PasswordHasher().hash(TEST_PASSWORD)
 
 
 @pytest.fixture
-def history_client(use_database, database):
-    """The shared app with a fresh, empty in-memory history database."""
-    return use_database(database)
+def sign_in(client, use_database, password_hash):
+    """sign_in(database, username, user_id) -> a Browser signed in as a new user.
+
+    The user and its session are written straight to the database; the browser holds
+    the session cookie and sends an allowed Origin, as a page of the interface does.
+    """
+    app = client.app
+
+    def sign_in(database, username: str = OWNER_NAME, user_id=None):
+        use_database(database)
+        user_id = add_user(database, username, password_hash, user_id)
+        settings = app.state.settings
+        token = start_session(database, user_id, settings.session_ttl)
+        browser = new_browser(app)
+        browser.cookies.set(settings.session_cookie_name, token)
+        browser.user_id, browser.token = user_id, token
+        return browser
+
+    return sign_in
+
+
+@pytest.fixture
+def history_client(sign_in, database):
+    """A browser signed in as OWNER_ID, with a fresh, empty in-memory history database."""
+    return sign_in(database, OWNER_NAME, OWNER_ID)

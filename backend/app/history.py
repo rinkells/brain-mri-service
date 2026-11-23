@@ -1,4 +1,8 @@
-"""Prediction history: saving, listing, deleting and statistics."""
+"""Prediction history: saving, listing, deleting and statistics.
+
+Every read and delete is limited to one user's records. A record of another user, or
+one saved before accounts existed (user_id NULL), is treated as if it did not exist.
+"""
 
 import logging
 import time
@@ -72,10 +76,16 @@ def save_prediction(database: Database | None, record: PredictionRecord) -> uuid
 
 
 def list_predictions(
-    session: Session, *, limit: int, offset: int, predicted_class: ClassName | None = None
+    session: Session,
+    user_id: uuid.UUID,
+    *,
+    limit: int,
+    offset: int,
+    predicted_class: ClassName | None = None,
 ) -> tuple[list[PredictionRecord], int]:
-    """One page of records, newest first, and the number of records matching the filter."""
-    conditions = []
+    """One page of the user's records, newest first, and the number of the user's
+    records matching the filter."""
+    conditions = [PredictionRecord.user_id == user_id]
     if predicted_class is not None:
         conditions.append(PredictionRecord.predicted_class == predicted_class)
 
@@ -90,14 +100,27 @@ def list_predictions(
     return list(records), total or 0
 
 
-def delete_prediction(session: Session, prediction_id: uuid.UUID) -> bool:
-    """Delete a record; return False if there was none.
+def get_prediction(
+    session: Session, user_id: uuid.UUID, prediction_id: uuid.UUID
+) -> PredictionRecord | None:
+    """The user's record with this id; None also when it belongs to someone else."""
+    return session.scalar(
+        select(PredictionRecord).where(
+            PredictionRecord.id == prediction_id, PredictionRecord.user_id == user_id
+        )
+    )
+
+
+def delete_prediction(session: Session, user_id: uuid.UUID, prediction_id: uuid.UUID) -> bool:
+    """Delete the user's record; return False if the user has no record with this id.
 
     The answer comes from the rows the DELETE itself removed. Reading the record
     first would let two simultaneous requests both see it and both report success.
     """
     result = session.execute(
-        delete(PredictionRecord).where(PredictionRecord.id == prediction_id)
+        delete(PredictionRecord).where(
+            PredictionRecord.id == prediction_id, PredictionRecord.user_id == user_id
+        )
     )
     session.commit()
     return result.rowcount > 0
@@ -130,8 +153,9 @@ def well_formed_warnings(warnings: object) -> list[dict[str, str]]:
     ]
 
 
-def count_warning_codes(session: Session) -> dict[str, int]:
-    """Number of predictions with each warning code; known codes are always present.
+def count_warning_codes(session: Session, user_id: uuid.UUID) -> dict[str, int]:
+    """Number of the user's predictions with each warning code; known codes are always
+    present.
 
     A prediction with several warnings counts once for each of its codes. The codes
     are counted in Python: unpacking a JSON array in SQL takes different functions on
@@ -141,7 +165,10 @@ def count_warning_codes(session: Session) -> dict[str, int]:
     counts = dict.fromkeys(WARNING_CODES, 0)
     rows = session.scalars(
         select(PredictionRecord.warnings)
-        .where(json_array_length(PredictionRecord.warnings) > 0)
+        .where(
+            PredictionRecord.user_id == user_id,
+            json_array_length(PredictionRecord.warnings) > 0,
+        )
         .execution_options(yield_per=1000)
     )
     for warnings in rows:
@@ -150,8 +177,8 @@ def count_warning_codes(session: Session) -> dict[str, int]:
     return counts
 
 
-def compute_stats(session: Session) -> HistoryStats:
-    """Statistics of the whole history, all taken at the same moment.
+def compute_stats(session: Session, user_id: uuid.UUID) -> HistoryStats:
+    """Statistics of the user's history, all taken at the same moment.
 
     The counts and the average come from one statement, so the total always equals the
     sum over the classes, even while predictions are being saved. On Postgres both
@@ -171,7 +198,9 @@ def compute_stats(session: Session) -> HistoryStats:
             func.count().filter(has_warnings),
             func.avg(PredictionRecord.latency_ms),
             *per_class,
-        ).select_from(PredictionRecord)
+        )
+        .select_from(PredictionRecord)
+        .where(PredictionRecord.user_id == user_id)
     ).one()
     total, with_warnings, average_latency, *class_counts = row
 
@@ -180,5 +209,5 @@ def compute_stats(session: Session) -> HistoryStats:
         by_class=dict(zip(CLASS_NAMES, class_counts)),
         with_warnings_share=with_warnings / total if total else None,
         average_latency_ms=float(average_latency) if average_latency is not None else None,
-        warnings_by_code=count_warning_codes(session),
+        warnings_by_code=count_warning_codes(session, user_id),
     )

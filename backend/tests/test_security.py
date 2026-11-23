@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
-from tests.helpers import image_bytes, make_record
+from tests.helpers import OWNER_ID, image_bytes, make_record
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 FOREIGN_ORIGIN = "https://evil.example"
@@ -38,7 +38,8 @@ def post_scan(client, **headers):
 
 
 def add_record(database):
-    record = make_record()
+    """A record of the user history_client is signed in as."""
+    record = make_record(user_id=OWNER_ID)
     with database.session() as session:
         session.add(record)
         session.commit()
@@ -285,8 +286,9 @@ def test_history_is_never_cached(history_client, database):
     assert missing.headers.get("cache-control") == "no-store"
 
 
-def test_no_store_is_only_for_the_history(client):
-    """/predict shares a prefix with /predictions, but is not part of the history."""
+def test_no_store_is_not_added_to_public_responses(client):
+    """/predict shares a prefix with /predictions, but an anonymous prediction is not
+    part of anyone's history (signed-in responses: see test_auth.py)."""
     assert client.get("/health").headers.get("cache-control") is None
     assert post_scan(client).headers.get("cache-control") is None
 

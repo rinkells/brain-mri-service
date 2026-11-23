@@ -1,4 +1,5 @@
-"""History endpoints: GET/DELETE /predictions and GET /stats."""
+"""History endpoints: GET/DELETE /predictions and GET /stats, each for the signed-in
+user's own records only."""
 
 import logging
 from collections.abc import Iterator
@@ -8,11 +9,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 
+from app.auth import UNAUTHORIZED_RESPONSE, CurrentUser
 from app.config import CLASS_NAMES, ClassName
 from app.database import Database
 from app.history import (
     compute_stats,
     delete_prediction,
+    get_prediction,
     list_predictions,
     well_formed_warnings,
 )
@@ -26,10 +29,11 @@ from app.schemas import (
     PredictionWarning,
     StatsResponse,
 )
+from app.security import FORBIDDEN_READ_RESPONSE, FORBIDDEN_WRITE_RESPONSE
 
 logger = logging.getLogger("uvicorn.error")
 
-HISTORY_DISABLED = "Історію вимкнено: не задано DATABASE_URL."
+HISTORY_DISABLED = "Облікові записи та історію вимкнено: не задано DATABASE_URL."
 DATABASE_UNAVAILABLE = "База даних недоступна. Спробуйте пізніше."
 DATABASE_REJECTED_VALUE = "База даних не прийняла значення із запиту. Перевірте параметри."
 NOT_FOUND = "Прогноз не знайдено."
@@ -38,9 +42,15 @@ NOT_FOUND = "Прогноз не знайдено."
 MAX_OFFSET = 1_000_000
 
 UNAVAILABLE_RESPONSE = {
-    503: {"model": ErrorResponse, "description": "Історію вимкнено або база даних недоступна"}
+    503: {
+        "model": ErrorResponse,
+        "description": "Облікові записи й історію вимкнено або база даних недоступна",
+    }
 }
-NOT_FOUND_RESPONSE = {404: {"model": ErrorResponse, "description": "Прогнозу з таким id немає"}}
+# Another user's record answers exactly like a missing one, so ids reveal nothing.
+NOT_FOUND_RESPONSE = {
+    404: {"model": ErrorResponse, "description": "У цього користувача немає прогнозу з таким id"}
+}
 
 
 def get_session(request: Request) -> Iterator[Session]:
@@ -53,7 +63,10 @@ def get_session(request: Request) -> Iterator[Session]:
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
-router = APIRouter(tags=["history"], responses={**UNAVAILABLE_RESPONSE, **RATE_LIMITED_RESPONSE})
+router = APIRouter(
+    tags=["history"],
+    responses={**UNAVAILABLE_RESPONSE, **RATE_LIMITED_RESPONSE, **UNAUTHORIZED_RESPONSE},
+)
 
 
 def readable_warnings(record: PredictionRecord) -> list[PredictionWarning]:
@@ -86,8 +99,14 @@ def to_response(record: PredictionRecord) -> PredictionRecordResponse:
     )
 
 
-@router.get("/predictions", response_model=PredictionPage, summary="Історія прогнозів")
+@router.get(
+    "/predictions",
+    response_model=PredictionPage,
+    responses=FORBIDDEN_READ_RESPONSE,
+    summary="Історія прогнозів користувача",
+)
 def list_history(
+    user: CurrentUser,
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=100, description="Скільки записів повернути")] = 20,
     offset: Annotated[
@@ -98,7 +117,7 @@ def list_history(
     ] = None,
 ) -> PredictionPage:
     records, total = list_predictions(
-        session, limit=limit, offset=offset, predicted_class=predicted_class
+        session, user.id, limit=limit, offset=offset, predicted_class=predicted_class
     )
     return PredictionPage(
         items=[to_response(record) for record in records],
@@ -111,11 +130,13 @@ def list_history(
 @router.get(
     "/predictions/{prediction_id}",
     response_model=PredictionRecordResponse,
-    responses=NOT_FOUND_RESPONSE,
-    summary="Один прогноз з історії",
+    responses={**NOT_FOUND_RESPONSE, **FORBIDDEN_READ_RESPONSE},
+    summary="Один прогноз з історії користувача",
 )
-def get_history_item(prediction_id: UUID, session: SessionDep) -> PredictionRecordResponse:
-    record = session.get(PredictionRecord, prediction_id)
+def get_history_item(
+    prediction_id: UUID, user: CurrentUser, session: SessionDep
+) -> PredictionRecordResponse:
+    record = get_prediction(session, user.id, prediction_id)
     if record is None:
         raise HTTPException(status_code=404, detail=NOT_FOUND)
     return to_response(record)
@@ -125,18 +146,23 @@ def get_history_item(prediction_id: UUID, session: SessionDep) -> PredictionReco
     "/predictions/{prediction_id}",
     status_code=204,
     response_class=Response,
-    responses=NOT_FOUND_RESPONSE,
-    summary="Видалити прогноз з історії",
+    responses={**NOT_FOUND_RESPONSE, **FORBIDDEN_WRITE_RESPONSE},
+    summary="Видалити прогноз з історії користувача",
 )
-def delete_history_item(prediction_id: UUID, session: SessionDep) -> Response:
-    if not delete_prediction(session, prediction_id):
+def delete_history_item(prediction_id: UUID, user: CurrentUser, session: SessionDep) -> Response:
+    if not delete_prediction(session, user.id, prediction_id):
         raise HTTPException(status_code=404, detail=NOT_FOUND)
     return Response(status_code=204)
 
 
-@router.get("/stats", response_model=StatsResponse, summary="Статистика прогнозів")
-def stats(session: SessionDep) -> StatsResponse:
-    result = compute_stats(session)
+@router.get(
+    "/stats",
+    response_model=StatsResponse,
+    responses=FORBIDDEN_READ_RESPONSE,
+    summary="Статистика прогнозів користувача",
+)
+def stats(user: CurrentUser, session: SessionDep) -> StatsResponse:
+    result = compute_stats(session, user.id)
     return StatsResponse(
         total=result.total,
         by_class=result.by_class,
