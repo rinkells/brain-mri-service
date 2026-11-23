@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.auth import UNAUTHORIZED_RESPONSE, CurrentUser
 from app.config import CLASS_NAMES, ClassName
 from app.database import Database
+from app.errors import DATABASE_NOT_CONFIGURED, CodedHTTPException
 from app.history import (
     compute_stats,
     delete_prediction,
@@ -56,7 +57,7 @@ NOT_FOUND_RESPONSE = {
 def get_session(request: Request) -> Iterator[Session]:
     database: Database | None = request.app.state.database
     if database is None:
-        raise HTTPException(status_code=503, detail=HISTORY_DISABLED)
+        raise CodedHTTPException(503, HISTORY_DISABLED, DATABASE_NOT_CONFIGURED)
     with database.session() as session:
         yield session
 

@@ -1,4 +1,5 @@
 import type { PredictionResponse } from '../../api/types'
+import { VIEW_HASH } from '../../hooks/useView'
 import { CLASS_LABELS } from '../../lib/classes'
 import { formatPercent } from '../../lib/format'
 import { groupWarnings } from '../../lib/warnings'
@@ -12,9 +13,49 @@ import { WarningList } from './WarningList'
 interface ResultPanelProps {
   result: PredictionResponse
   scanUrl: string
+  /** Whether a user was signed in when the scan was sent: only then is it saved. */
+  signedInAtRequest?: boolean
+  /** Whether a user is signed in now: a guest is offered to sign in. */
+  signedInNow?: boolean
 }
 
-export function ResultPanel({ result, scanUrl }: ResultPanelProps) {
+interface SavedNoteProps {
+  saved: boolean
+  signedInAtRequest: boolean
+  signedInNow: boolean
+}
+
+function SavedNote({ saved, signedInAtRequest, signedInNow }: SavedNoteProps) {
+  if (saved) {
+    return <>Результат збережено в історії (без самого знімка).</>
+  }
+  if (signedInAtRequest) {
+    return <>Результат не збережено в історії: історію вимкнено або база даних недоступна.</>
+  }
+  if (signedInNow) {
+    // Sent as a guest, and the user signed in since: the reason is that, nothing else.
+    return <>Результат не збережено: аналіз виконано без входу.</>
+  }
+  return (
+    <>
+      Результат не збережено.{' '}
+      <a
+        href={VIEW_HASH.login}
+        className="font-medium text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
+      >
+        Увійдіть
+      </a>
+      , щоб зберігати історію.
+    </>
+  )
+}
+
+export function ResultPanel({
+  result,
+  scanUrl,
+  signedInAtRequest = false,
+  signedInNow = false,
+}: ResultPanelProps) {
   const predicted = result.predicted_class
   const confidence = result.probabilities[predicted] ?? 0
   // Known codes have their own presentation; other codes go to the list.
@@ -41,9 +82,11 @@ export function ResultPanel({ result, scanUrl }: ResultPanelProps) {
           {result.image_size.height}
         </p>
         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {result.id
-            ? 'Результат збережено в історії (без самого знімка).'
-            : 'Результат не збережено в історії: історію вимкнено або база даних недоступна.'}
+          <SavedNote
+            saved={Boolean(result.id)}
+            signedInAtRequest={signedInAtRequest}
+            signedInNow={signedInNow}
+          />
         </p>
         {warnings.imageSize && <ImageSizeNote message={warnings.imageSize.message} />}
       </div>

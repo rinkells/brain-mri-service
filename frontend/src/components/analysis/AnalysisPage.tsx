@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { predict } from '../../api/client'
 import type { PredictionResponse } from '../../api/types'
+import { useAuth } from '../../hooks/useAuth'
 import { useImageSelection } from '../../hooks/useImageSelection'
 import { validateImageFile } from '../../lib/validation'
 import { ResultPanel } from '../result/ResultPanel'
@@ -12,7 +13,8 @@ import { UploadZone } from '../upload/UploadZone'
 type RequestState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'success'; result: PredictionResponse; scanUrl: string }
+  // signedIn: when the request was sent; the note under the result is about that moment.
+  | { status: 'success'; result: PredictionResponse; scanUrl: string; signedIn: boolean }
   | { status: 'error'; error: unknown }
 
 /** Upload a scan, send it to POST /predict and show the result. */
@@ -22,6 +24,7 @@ export function AnalysisPage() {
   const [gradcam, setGradcam] = useState(false)
   const [request, setRequest] = useState<RequestState>({ status: 'idle' })
   const controllerRef = useRef<AbortController | null>(null)
+  const { auth } = useAuth()
 
   useEffect(() => () => controllerRef.current?.abort(), [])
 
@@ -58,10 +61,11 @@ export function AnalysisPage() {
     const controller = new AbortController()
     controllerRef.current = controller
     setRequest({ status: 'loading' })
+    const signedIn = auth.status === 'signed-in'
 
     try {
       const result = await predict(selection.file, { gradcam, signal: controller.signal })
-      setRequest({ status: 'success', result, scanUrl: selection.previewUrl })
+      setRequest({ status: 'success', result, scanUrl: selection.previewUrl, signedIn })
     } catch (error) {
       if (!controller.signal.aborted) {
         setRequest({ status: 'error', error })
@@ -94,7 +98,12 @@ export function AnalysisPage() {
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         {request.status === 'success' ? (
-          <ResultPanel result={request.result} scanUrl={request.scanUrl} />
+          <ResultPanel
+            result={request.result}
+            scanUrl={request.scanUrl}
+            signedInAtRequest={request.signedIn}
+            signedInNow={auth.status === 'signed-in'}
+          />
         ) : (
           <div className="flex h-full min-h-64 items-center justify-center text-center text-slate-500 dark:text-slate-400">
             {request.status === 'loading'

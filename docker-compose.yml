@@ -74,6 +74,7 @@ services:
       # The interface is served over plain HTTP on localhost: a Secure cookie would never be
       # sent back. Set it to true behind HTTPS.
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      SESSION_MAX_PER_USER: ${SESSION_MAX_PER_USER:-10}
       LOGIN_FAILURES_MAX: ${LOGIN_FAILURES_MAX:-5}
       LOGIN_FAILURES_WINDOW_MINUTES: ${LOGIN_FAILURES_WINDOW_MINUTES:-15}
       # Only nginx of the frontend service may name the client (X-Real-IP). Not the whole

@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, SecretStr
 
 from app.config import ClassName
+from app.errors import CODE_DESCRIPTION
 
 
 class HealthResponse(BaseModel):
@@ -94,7 +95,8 @@ class StatsResponse(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    detail: str
+    detail: str = Field(description="Пояснення для людини українською; текст може змінюватися")
+    code: str | None = Field(default=None, description=CODE_DESCRIPTION)
 
 
 # Passwords are SecretStr: a repr, a log line or an error message shows "**********".

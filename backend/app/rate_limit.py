@@ -12,11 +12,11 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Callable
 
-from fastapi.responses import JSONResponse
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.addresses import IPAddress, parse_address
+from app.errors import RATE_LIMITED, error_response
 from app.config import Settings
 from app.schemas import ErrorResponse
 
@@ -26,7 +26,10 @@ MAX_KEYS = 10_000
 # The prefix an IPv6 client usually gets for itself: all of it counts as one client.
 IPV6_PREFIX = 64
 HEALTH_PATH = "/health"
-AUTH_PREFIX = "/auth/"
+# The strict auth bucket: only the requests that check a password to let someone in.
+# GET /auth/me runs on every page load and is an ordinary read; POST /auth/logout and
+# DELETE /auth/me are ordinary writes (DELETE /auth/me also counts wrong passwords).
+AUTH_BUCKET_ROUTES = frozenset({("POST", "/auth/login"), ("POST", "/auth/register")})
 READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # A name longer than any valid one cannot belong to a user; only this much of it is
 # kept as part of a key, so huge names cannot fill the memory.
@@ -46,23 +49,34 @@ def retry_after_seconds(wait: float) -> int:
     return max(1, math.ceil(wait))
 
 
-RATE_LIMITED_RESPONSE = {
-    429: {
-        "model": ErrorResponse,
-        "description": (
-            "Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу "
-            "й видалення облікового запису ще й забагато неправильних паролів для цього "
-            "імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через "
-            "скільки секунд повторити"
-        ),
-        "headers": {
-            "Retry-After": {
-                "description": "Ціле число секунд, не менше 1",
-                "schema": {"type": "integer"},
-            }
-        },
+RETRY_AFTER_HEADER = {
+    "Retry-After": {
+        "description": "Ціле число секунд, не менше 1",
+        "schema": {"type": "integer"},
     }
 }
+WRONG_PASSWORDS = (
+    " або забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_MAX за "
+    "LOGIN_FAILURES_WINDOW_MINUTES)"
+)
+
+
+def rate_limited_response(limit: str = "RATE_LIMIT_*", wrong_passwords: bool = False) -> dict:
+    """429 in the API description, naming the limit the route counts against."""
+    return {
+        429: {
+            "model": ErrorResponse,
+            "description": (
+                f"Забагато запитів з цієї адреси за останню хвилину ({limit})"
+                + (WRONG_PASSWORDS if wrong_passwords else "")
+                + "; заголовок Retry-After каже, через скільки секунд повторити"
+            ),
+            "headers": RETRY_AFTER_HEADER,
+        }
+    }
+
+
+RATE_LIMITED_RESPONSE = rate_limited_response()
 
 
 class SlidingWindowLimiter:
@@ -178,7 +192,7 @@ def bucket_of(method: str, path: str) -> str | None:
     (the container healthchecks call it)."""
     if path == HEALTH_PATH:
         return None
-    if path.startswith(AUTH_PREFIX):
+    if (method, path) in AUTH_BUCKET_ROUTES:
         return "auth"
     if method == "POST" and path == "/predict":
         return "predict"
@@ -246,9 +260,10 @@ class RateLimitMiddleware:
                 wait = state.rate_limiters[bucket].hit(key)
                 if wait > 0:
                     seconds = retry_after_seconds(wait)
-                    response = JSONResponse(
-                        {"detail": too_many_requests_detail(seconds)},
-                        status_code=429,
+                    response = error_response(
+                        429,
+                        too_many_requests_detail(seconds),
+                        RATE_LIMITED,
                         headers={"Retry-After": str(seconds)},
                     )
                     await response(scope, receive, send)

@@ -31,9 +31,10 @@ from app.auth import (
     username_taken,
 )
 from app.database import Database
+from app.errors import DATABASE_NOT_CONFIGURED, LOGIN_LOCKED, WRONG_PASSWORD, CodedHTTPException
 from app.history_api import HISTORY_DISABLED, UNAVAILABLE_RESPONSE
 from app.rate_limit import (
-    RATE_LIMITED_RESPONSE,
+    rate_limited_response,
     SlidingWindowLimiter,
     login_failure_key,
     rate_limit_key,
@@ -69,11 +70,15 @@ INVALID_CREDENTIALS_RESPONSE = {
         ),
     }
 }
+BODY_TOO_LARGE_RESPONSE = {
+    413: {"model": ErrorResponse, "description": "Тіло запиту більше за 8 КіБ"}
+}
 INVALID_PASSWORD_BODY_RESPONSE = {
     422: {"model": ErrorResponse, "description": "Тіло не є JSON-об'єктом із текстовим password"}
 }
 
-router = APIRouter(prefix="/auth", tags=["auth"], responses=RATE_LIMITED_RESPONSE)
+# Each route names the limit it counts against (app.rate_limit.bucket_of).
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 async def body_validation_error_handler(
@@ -90,7 +95,7 @@ async def body_validation_error_handler(
 def database_of(request: Request) -> Database:
     database: Database | None = request.app.state.database
     if database is None:
-        raise HTTPException(status_code=503, detail=HISTORY_DISABLED)
+        raise CodedHTTPException(503, HISTORY_DISABLED, DATABASE_NOT_CONFIGURED)
     return database
 
 
@@ -117,9 +122,10 @@ def refuse_while_failing(request: Request, key: str) -> None:
             seconds,
             rate_limit_key(request.scope, settings.trusted_proxy_addresses),
         )
-        raise HTTPException(
-            status_code=429,
-            detail=too_many_failures_detail(seconds),
+        raise CodedHTTPException(
+            429,
+            too_many_failures_detail(seconds),
+            LOGIN_LOCKED,
             headers={"Retry-After": str(seconds)},
         )
 
@@ -133,6 +139,7 @@ async def begin_session(request: Request, response: Response, user: SessionUser)
         user.id,
         settings.session_ttl,
         session_cookie(request.scope),
+        settings.session_max_per_user,
     )
     set_session_cookie(response, token, settings)
 
@@ -143,8 +150,10 @@ async def begin_session(request: Request, response: Response, user: SessionUser)
     response_model=UserResponse,
     responses={
         **INVALID_CREDENTIALS_RESPONSE,
+        **BODY_TOO_LARGE_RESPONSE,
         **FORBIDDEN_WRITE_RESPONSE,
         **UNAVAILABLE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_AUTH_PER_MINUTE"),
         409: {"model": ErrorResponse, "description": "Ім'я вже зайняте (без урахування регістру)"},
     },
     summary="Зареєструватися (й одразу увійти)",
@@ -174,8 +183,10 @@ async def register(request: Request, response: Response, body: CredentialsReques
     response_model=UserResponse,
     responses={
         **INVALID_CREDENTIALS_RESPONSE,
+        **BODY_TOO_LARGE_RESPONSE,
         **FORBIDDEN_WRITE_RESPONSE,
         **UNAVAILABLE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_AUTH_PER_MINUTE", wrong_passwords=True),
         401: {
             "model": ErrorResponse,
             "description": "Неправильне ім'я або пароль (одна відповідь на обидва випадки)",
@@ -209,7 +220,10 @@ async def login(request: Request, response: Response, body: CredentialsRequest) 
     "/logout",
     status_code=204,
     response_class=Response,
-    responses=FORBIDDEN_WRITE_RESPONSE,
+    responses={
+        **FORBIDDEN_WRITE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_WRITE_PER_MINUTE"),
+    },
     summary="Вийти",
 )
 async def logout(request: Request) -> Response:
@@ -227,7 +241,12 @@ async def logout(request: Request) -> Response:
 @router.get(
     "/me",
     response_model=UserResponse,
-    responses={**UNAUTHORIZED_RESPONSE, **FORBIDDEN_READ_RESPONSE, **UNAVAILABLE_RESPONSE},
+    responses={
+        **UNAUTHORIZED_RESPONSE,
+        **FORBIDDEN_READ_RESPONSE,
+        **UNAVAILABLE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_READ_PER_MINUTE"),
+    },
     summary="Поточний користувач",
 )
 async def me(user: CurrentUser) -> UserResponse:
@@ -241,7 +260,9 @@ async def me(user: CurrentUser) -> UserResponse:
     responses={
         **UNAUTHORIZED_RESPONSE,
         **INVALID_PASSWORD_BODY_RESPONSE,
+        **BODY_TOO_LARGE_RESPONSE,
         **UNAVAILABLE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_WRITE_PER_MINUTE", wrong_passwords=True),
         403: {
             "model": ErrorResponse,
             "description": (
@@ -263,7 +284,7 @@ async def delete_me(request: Request, user: CurrentUser, body: DeleteAccountRequ
     passwords: Passwords = request.app.state.passwords
     if not await passwords.verify(stored_hash, body.password.get_secret_value()):
         request.app.state.login_failures.hit(key)
-        raise HTTPException(status_code=403, detail=PASSWORD_MISMATCH)
+        raise CodedHTTPException(403, PASSWORD_MISMATCH, WRONG_PASSWORD)
     request.app.state.login_failures.forget(key)
 
     await run_in_threadpool(delete_user, database, user.id)

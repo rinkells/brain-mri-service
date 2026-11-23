@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     NOT_MRI_DARK_MIN, NOT_MRI_OPAQUE_MIN, DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS,
     ENABLE_DOCS, RATE_LIMIT_ENABLED, RATE_LIMIT_PREDICT_PER_MINUTE, RATE_LIMIT_WRITE_PER_MINUTE,
     RATE_LIMIT_READ_PER_MINUTE, RATE_LIMIT_AUTH_PER_MINUTE, TRUSTED_PROXIES, SESSION_TTL_HOURS,
-    SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, LOGIN_FAILURES_MAX and
+    SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, SESSION_MAX_PER_USER, LOGIN_FAILURES_MAX and
     LOGIN_FAILURES_WINDOW_MINUTES."""
 
     model_config = SettingsConfigDict(
@@ -124,9 +124,10 @@ class Settings(BaseSettings):
     )
     # Serve Swagger UI (/docs), ReDoc (/redoc) and the schema (/openapi.json).
     enable_docs: bool = True
-    # Requests per client in any 60 s: POST /predict, other writes (DELETE), reads (GET),
-    # and every request to /auth/*. Above the limit the API answers 429 with Retry-After;
-    # /health is never limited.
+    # Requests per client in any 60 s: POST /predict, other writes (DELETE, POST
+    # /auth/logout), reads (GET, GET /auth/me), and signing in or registering (POST
+    # /auth/login and /auth/register). Above the limit the API answers 429 with
+    # Retry-After; /health is never limited.
     rate_limit_enabled: bool = True
     rate_limit_predict_per_minute: int = Field(default=10, gt=0)
     rate_limit_write_per_minute: int = Field(default=30, gt=0)
@@ -141,6 +142,9 @@ class Settings(BaseSettings):
     # Send the cookie over HTTPS only. Off by default: the service runs on plain HTTP on
     # localhost, where a Secure cookie would never come back.
     session_cookie_secure: bool = False
+    # Sessions one user may have at once (browsers, devices); signing in once more
+    # deletes the oldest.
+    session_max_per_user: int = Field(default=10, gt=0)
     # After LOGIN_FAILURES_MAX wrong passwords for one name from one address within
     # LOGIN_FAILURES_WINDOW_MINUTES, sign-in answers 429 until the oldest leaves the window.
     # Independent of RATE_LIMIT_ENABLED.

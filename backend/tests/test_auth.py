@@ -36,7 +36,7 @@ LOGIN_FAILED = {"detail": "Неправильне ім'я користувача
 NOT_SIGNED_IN = {"detail": "Потрібно увійти в обліковий запис."}
 SESSION_EXPIRED = {"detail": "Сесія недійсна або закінчилася. Увійдіть знову."}
 USERNAME_TAKEN = {"detail": "Це ім'я користувача вже зайняте."}
-PASSWORD_MISMATCH = {"detail": "Неправильний пароль."}
+PASSWORD_MISMATCH = {"detail": "Неправильний пароль.", "code": "wrong_password"}
 BAD_USERNAME = (
     "Ім'я користувача має містити від 3 до 32 символів: латинські літери, цифри, «_», «.» "
     "або «-»."
@@ -704,6 +704,7 @@ def test_accounts_need_a_database(client, method, path, body):
 
     assert response.status_code == 503
     assert "DATABASE_URL" in response.json()["detail"]
+    assert response.json()["code"] == "database_not_configured"
 
 
 def test_logout_works_without_a_database(client):
@@ -906,9 +907,155 @@ def test_openapi_documents_the_auth_responses(client):
         assert codes <= set(paths[path][method]["responses"]), (path, method)
     with_body = [("/auth/register", "post"), ("/auth/login", "post"), ("/auth/me", "delete")]
     for path, method in with_body:
+        assert "413" in paths[path][method]["responses"], (path, method)
         body = paths[path][method]["responses"]["422"]["content"]["application/json"]["schema"]
         assert body["$ref"].endswith("/ErrorResponse"), (path, method)
     password = schema["components"]["schemas"]["CredentialsRequest"]["properties"]["password"]
     assert (password["format"], password["writeOnly"]) == ("password", True)
     assert "401" not in paths["/health"]["get"]["responses"]
     assert "403" not in paths["/health"]["get"]["responses"]
+
+
+# --- Size of /auth/* bodies ------------------------------------------------------------
+
+AUTH_BODY_TOO_LARGE = {
+    "detail": "Тіло запиту до /auth/* завелике: дозволено не більше 8 КіБ.",
+    "code": "body_too_large",
+}
+AUTH_BODY_LIMIT = 8 * 1024
+JSON = {"Content-Type": "application/json"}
+
+
+def credentials_body(size: int) -> bytes:
+    """A JSON body of exactly `size` bytes with a well-formed name and a long password."""
+    head, tail = b'{"username": "alice", "password": "', b'"}'
+    return head + b"p" * (size - len(head) - len(tail)) + tail
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("POST", "/auth/register"), ("POST", "/auth/login"), ("DELETE", "/auth/me")],
+)
+def test_an_auth_body_over_8_kib_is_413_before_it_is_parsed(browser, method, path):
+    register(browser)
+    not_even_json = b"{" + b" " * AUTH_BODY_LIMIT
+
+    for body in (credentials_body(AUTH_BODY_LIMIT + 1), not_even_json):
+        response = browser.request(method, path, content=body, headers=JSON)
+        assert response.status_code == 413, (path, len(body))
+        assert response.json() == AUTH_BODY_TOO_LARGE
+        assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("path", ["/auth/register", "/auth/login"])
+def test_a_chunked_auth_body_over_8_kib_is_413_too(browser, path):
+    """Without Content-Length the bytes are counted as they arrive."""
+    chunks = (b"{" + b" " * 1023 for _ in range(9))
+
+    response = browser.post(path, content=chunks, headers=JSON)
+
+    assert response.status_code == 413
+    assert response.json() == AUTH_BODY_TOO_LARGE
+
+
+def test_an_auth_body_of_exactly_8_kib_is_read(app, browser, password_hash, database):
+    add_user(database, "alice", password_hash)
+
+    response = browser.post("/auth/login", content=credentials_body(AUTH_BODY_LIMIT), headers=JSON)
+
+    assert response.status_code == 401
+    assert response.json() == LOGIN_FAILED
+
+
+def test_the_8_kib_limit_is_only_for_auth(app, browser):
+    """A scan may still be as large as MAX_UPLOAD_MB (1 MB in the tests)."""
+    register(browser)
+    scan = {"file": ("scan.png", image_bytes(512, 512) + b"\0" * 64 * 1024, "image/png")}
+
+    assert browser.post("/predict", files=scan).status_code == 200
+
+
+# --- At most SESSION_MAX_PER_USER sessions per user ------------------------------------
+
+
+def test_a_user_keeps_at_most_ten_sessions(app, database, password_hash):
+    add_user(database, "alice", password_hash)
+    add_user(database, "bob", password_hash)
+    bob_tokens = [token_of(login(new_browser(app), "bob")) for _ in range(2)]
+
+    tokens = [token_of(login(new_browser(app), "alice")) for _ in range(12)]
+
+    alice_sessions = {session_id_of(token) for token in tokens}
+    stored = {row.id for row in sessions(database)}
+    assert stored & alice_sessions == {session_id_of(token) for token in tokens[-10:]}
+    assert {session_id_of(token) for token in bob_tokens} <= stored
+    for oldest in tokens[:2]:
+        assert holding(app, oldest).get("/auth/me").json() == SESSION_EXPIRED
+    assert holding(app, tokens[2]).get("/auth/me").status_code == 200
+    assert holding(app, tokens[-1]).get("/auth/me").status_code == 200
+
+
+def test_registration_counts_towards_the_sessions_of_a_user(app, browser, database, settings_of):
+    settings_of(session_max_per_user=2)
+    first = token_of(register(browser, "alice"))
+
+    later = [token_of(login(new_browser(app), "alice")) for _ in range(2)]
+
+    assert {row.id for row in sessions(database)} == {session_id_of(token) for token in later}
+    assert holding(app, first).get("/auth/me").json() == SESSION_EXPIRED
+
+
+# --- A stable code for the errors the interface tells apart ------------------------------
+
+
+@pytest.mark.parametrize(
+    "path", ["/predictions", "/stats", "/predictions/6f1c2a3e-0000-4000-8000-000000000001"]
+)
+def test_history_without_a_database_says_so_with_a_code(client, path):
+    response = client.get(path)
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Облікові записи та історію вимкнено: не задано DATABASE_URL.",
+        "code": "database_not_configured",
+    }
+
+
+def test_a_foreign_origin_on_account_deletion_has_no_wrong_password_code(browser):
+    """Both are 403: only the code tells a wrong password from the Origin check."""
+    register(browser)
+
+    refused = browser.request(
+        "DELETE", "/auth/me", json={"password": PASSWORD}, headers={"Origin": "https://evil.ex"}
+    )
+
+    assert refused.status_code == 403
+    assert refused.json() == FOREIGN_ORIGIN
+
+
+def test_errors_without_a_code_keep_their_old_shape(app, browser):
+    """code is added only where the interface needs it; other bodies are unchanged."""
+    register(browser)
+
+    for response in (
+        browser.get("/predictions/6f1c2a3e-0000-4000-8000-000000000001"),
+        login(new_browser(app), "alice", WRONG_PASSWORD),
+        new_browser(app).get("/auth/me"),
+        register(new_browser(app), "alice"),
+    ):
+        assert set(response.json()) == {"detail"}, response.request.url
+
+
+def test_openapi_documents_the_error_code(client):
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["ErrorResponse"]
+
+    assert schema["required"] == ["detail"]
+    code = schema["properties"]["code"]
+    for value in (
+        "database_not_configured",
+        "login_locked",
+        "rate_limited",
+        "wrong_password",
+        "body_too_large",
+    ):
+        assert value in code["description"], value

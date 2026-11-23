@@ -27,10 +27,22 @@ from app.config import (
     Settings,
     get_settings,
 )
-from app.auth import SESSION_USER, Passwords, SessionUser
+from app.auth import (
+    AUTH_BODY_TOO_LARGE,
+    AUTH_MAX_BODY_BYTES,
+    SESSION_USER,
+    Passwords,
+    SessionUser,
+)
 from app.auth_api import body_validation_error_handler
 from app.auth_api import router as auth_router
 from app.database import Database
+from app.errors import (
+    BODY_TOO_LARGE,
+    CodedHTTPException,
+    coded_http_exception_handler,
+    error_body,
+)
 from app.gradcam import encode_png_base64, overlay_heatmap
 from app.history import save_prediction
 from app.history_api import DATABASE_REJECTED_VALUE, DATABASE_UNAVAILABLE
@@ -60,6 +72,7 @@ from app.schemas import (
     PredictionWarning,
 )
 from app.security import (
+    AUTH_PREFIX,
     FORBIDDEN_WRITE_RESPONSE,
     CrossSiteCheckMiddleware,
     OriginCheckMiddleware,
@@ -87,7 +100,11 @@ def file_too_large_detail(settings: Settings) -> str:
 
 
 class MaxBodySizeMiddleware:
-    """Answer 413 to oversized request bodies before they are buffered to disk."""
+    """Answer 413 to oversized request bodies before they are buffered to disk or parsed.
+
+    Bodies of /auth/* hold a name and a password: they get AUTH_MAX_BODY_BYTES, far less
+    than a scan, so a sign-in never makes the API parse megabytes of JSON.
+    """
 
     def __init__(self, app: ASGIApp, max_bytes: int, detail: str) -> None:
         self.app = app
@@ -99,9 +116,14 @@ class MaxBodySizeMiddleware:
             await self.app(scope, receive, send)
             return
 
+        if scope["path"].startswith(AUTH_PREFIX):
+            max_bytes, detail, code = AUTH_MAX_BODY_BYTES, AUTH_BODY_TOO_LARGE, BODY_TOO_LARGE
+        else:
+            max_bytes, detail, code = self.max_bytes, self.detail, None
+
         declared = Headers(scope=scope).get("content-length", "")
-        if declared.isdigit() and int(declared) > self.max_bytes:
-            response = JSONResponse({"detail": self.detail}, status_code=413)
+        if declared.isdigit() and int(declared) > max_bytes:
+            response = JSONResponse(error_body(detail, code), status_code=413)
             await response(scope, receive, send)
             return
 
@@ -113,9 +135,11 @@ class MaxBodySizeMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_bytes:
-                    # Raised while FastAPI parses the form; it becomes a 413 response.
-                    raise HTTPException(status_code=413, detail=self.detail)
+                if received > max_bytes:
+                    # Raised while FastAPI reads the form or the JSON; it becomes a 413.
+                    if code is not None:
+                        raise CodedHTTPException(413, detail, code)
+                    raise HTTPException(status_code=413, detail=detail)
             return message
 
         await self.app(scope, limited_receive, send)
@@ -411,6 +435,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(OperationalError, database_unavailable_handler)
     app.add_exception_handler(PoolTimeoutError, database_unavailable_handler)
     app.add_exception_handler(DataError, database_data_error_handler)
+    # Errors the interface tells apart carry a stable code next to the text.
+    app.add_exception_handler(CodedHTTPException, coded_http_exception_handler)
     # Bodies of /auth/* that cannot be parsed get 422 without the values they held.
     app.add_exception_handler(RequestValidationError, body_validation_error_handler)
     app.include_router(router)
