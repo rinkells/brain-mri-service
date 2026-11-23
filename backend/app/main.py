@@ -354,8 +354,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.inference_limiter = InferenceLimiter(
             settings.max_concurrent_inferences, settings.max_queue
         )
-        # argon2id hashing in worker threads; builds the dummy hash (~0.1 s) once here.
-        app.state.passwords = Passwords()
+        # argon2id hashing in worker threads; the dummy hash (~0.1 s) is made once here.
+        app.state.passwords = await Passwords.create()
         logger.info(
             "Model %s loaded from %s on %s",
             settings.model_version,

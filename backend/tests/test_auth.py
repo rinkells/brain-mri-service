@@ -5,6 +5,7 @@ Every test gets a fresh in-memory database. Users are created through the API, s
 real argon2id hashing runs (about 0.1 s per hash).
 """
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -15,11 +16,13 @@ from datetime import UTC, datetime, timedelta
 
 import argon2
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import OperationalError
 
 from app.auth import session_id_of
 from app.database import Database, create_db_engine
+from app.main import create_app
 from app.records import PredictionRecord, User, UserSession
 from app.schemas import CredentialsRequest, DeleteAccountRequest
 from tests.helpers import TEST_ORIGIN, add_user, image_bytes, new_browser
@@ -372,6 +375,39 @@ def test_an_unknown_name_takes_about_as_long_as_a_wrong_password(app, database, 
 
     # Both are dominated by one argon2id check (~0.1 s); a skipped check would be ~1 ms.
     assert 0.5 < unknown / known < 2
+
+
+def test_password_hashing_never_runs_in_the_event_loop(settings, database, monkeypatch):
+    """Not at start-up (the dummy hash), not for registration, not for sign-in."""
+    calls = []
+
+    def in_event_loop() -> bool:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        return True
+
+    def spying(method):
+        real = getattr(argon2.PasswordHasher, method)
+
+        def spy(self, *args, **kwargs):
+            calls.append((method, in_event_loop()))
+            return real(self, *args, **kwargs)
+
+        return spy
+
+    for method in ("hash", "verify"):
+        monkeypatch.setattr(argon2.PasswordHasher, method, spying(method))
+
+    with TestClient(create_app(settings)) as started:
+        started.app.state.database = database
+        assert register(new_browser(started.app), "alice").status_code == 201
+        assert login(new_browser(started.app), "alice", WRONG_PASSWORD).status_code == 401
+        assert login(new_browser(started.app), "alice").status_code == 200
+
+    assert [method for method, _ in calls] == ["hash", "hash", "verify", "verify"]
+    assert not any(in_loop for _, in_loop in calls)
 
 
 def test_an_outdated_hash_is_replaced_at_login(app, database):

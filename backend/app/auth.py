@@ -147,14 +147,28 @@ def clear_session_cookie(response: Response, settings: Settings) -> None:
 
 class Passwords:
     """argon2id hashing in worker threads, never in the event loop, and at most
-    MAX_CONCURRENT_PASSWORD_HASHES at a time. Create it inside the running app."""
+    MAX_CONCURRENT_PASSWORD_HASHES at a time. Made with `await Passwords.create()`."""
 
-    def __init__(self, max_concurrent: int = MAX_CONCURRENT_PASSWORD_HASHES) -> None:
-        self._hasher = argon2.PasswordHasher()
-        self._limiter = anyio.CapacityLimiter(max_concurrent)
+    def __init__(
+        self,
+        hasher: argon2.PasswordHasher,
+        dummy_hash: str,
+        max_concurrent: int = MAX_CONCURRENT_PASSWORD_HASHES,
+    ) -> None:
+        self._hasher = hasher
         # Checked when the name belongs to nobody, so that answer takes as long as a
         # wrong password does. Same parameters as every new hash.
-        self._dummy_hash = self._hasher.hash(secrets.token_urlsafe(TOKEN_BYTES))
+        self._dummy_hash = dummy_hash
+        self._limiter = anyio.CapacityLimiter(max_concurrent)
+
+    @classmethod
+    async def create(cls, max_concurrent: int = MAX_CONCURRENT_PASSWORD_HASHES) -> "Passwords":
+        """The dummy hash, too, is computed in a worker thread (~0.1 s, once)."""
+        hasher = argon2.PasswordHasher()
+        dummy_hash = await anyio.to_thread.run_sync(
+            hasher.hash, secrets.token_urlsafe(TOKEN_BYTES)
+        )
+        return cls(hasher, dummy_hash, max_concurrent)
 
     async def hash(self, password: str) -> str:
         return await anyio.to_thread.run_sync(self._hasher.hash, password, limiter=self._limiter)
