@@ -231,9 +231,10 @@ HEALTH_DESCRIPTION = (
 )
 READY_DESCRIPTION = (
     "Readiness: сервіс готовий до повної роботи — модель завантажена, а база відповіла на "
-    "SELECT 1 не довше ніж за 2 с (без DATABASE_URL база вважається недоступною). Тоді "
-    "200 і status=ready, інакше 503 і status=not_ready; поля model і database кажуть, що "
-    "саме не готове, без тексту помилки. Цим шляхом перевіряє стан сервісу api Docker "
+    "SELECT 1 не довше ніж за 2 с. Без DATABASE_URL база не використовується й не "
+    "перевіряється: database=null, і готовність залежить лише від моделі. Тоді 200 і "
+    "status=ready, інакше 503 і status=not_ready; поля model і database кажуть, що саме не "
+    "готове, без тексту помилки. Цим шляхом перевіряє стан сервісу api Docker "
     "Compose. Не обмежується лімітом, не потребує сесії, не відхиляється перевіркою "
     "запитів зі сторінок інших сайтів і не кешується (Cache-Control: no-store)."
 )
@@ -263,10 +264,14 @@ async def health(request: Request) -> HealthResponse:
     summary="Готовність до роботи (readiness)",
     description=READY_DESCRIPTION,
     responses={
-        200: {"description": "Модель завантажена, база відповідає"},
+        200: {
+            "description": (
+                "Модель завантажена, а база відповідає (або не використовується: database=null)"
+            )
+        },
         503: {
             "model": ReadinessResponse,
-            "description": "Модель не завантажена або база не відповіла за 2 с",
+            "description": "Модель не завантажена або задана база не відповіла за 2 с",
         },
     },
 )
@@ -274,11 +279,15 @@ async def ready(request: Request) -> JSONResponse:
     state = request.app.state
     model = getattr(state, "classifier", None) is not None
     database: Database | None = getattr(state, "database", None)
-    probe: DatabaseProbe = state.readiness
-    # SELECT 1 runs in a thread of the probe, never in the event loop.
-    database_ok = database is not None and await probe.reachable(database)
+    # Without DATABASE_URL the service runs without a database by design: it is not a
+    # dependency, so it is not checked (null). Otherwise SELECT 1 runs in a thread of the
+    # probe, never in the event loop.
+    database_ok: bool | None = None
+    if database is not None:
+        probe: DatabaseProbe = state.readiness
+        database_ok = await probe.reachable(database)
     body = ReadinessResponse(
-        status="ready" if model and database_ok else "not_ready",
+        status="ready" if model and database_ok is not False else "not_ready",
         model=model,
         database=database_ok,
     )

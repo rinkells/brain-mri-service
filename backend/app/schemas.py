@@ -19,12 +19,17 @@ class HealthResponse(BaseModel):
 
 class ReadinessResponse(BaseModel):
     status: Literal["ready", "not_ready"] = Field(
-        description="ready, коли модель завантажена й база відповідає; інакше not_ready"
+        description=(
+            "ready, коли модель завантажена, а база (якщо вона використовується) відповідає; "
+            "інакше not_ready"
+        )
     )
     model: bool = Field(description="Модель завантажена")
-    database: bool = Field(
+    database: bool | None = Field(
         description=(
-            "База відповіла на SELECT 1 за 2 с; false також тоді, коли DATABASE_URL не задано"
+            "true — база відповіла на SELECT 1 за 2 с; false — DATABASE_URL задано, але база "
+            "не відповіла; null — база не використовується (DATABASE_URL не задано), тож від "
+            "неї готовність не залежить"
         )
     )
 

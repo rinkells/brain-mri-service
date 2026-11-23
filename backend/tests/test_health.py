@@ -131,24 +131,35 @@ def test_not_ready_when_the_database_cannot_be_reached(use_database, error):
     assert_security_headers(response)
 
 
-def test_not_ready_without_database_url(client):
-    """Without DATABASE_URL nothing is saved and no one can sign in: not fully ready."""
+def test_ready_without_database_url(client):
+    """Without DATABASE_URL the service is meant to run without a database: it is not a
+    dependency, so it is not checked, and database is null ("not used")."""
     assert client.app.state.database is None
 
     response = client.get("/health/ready")
 
-    assert response.status_code == 503
-    assert response.json() == {"status": "not_ready", "model": True, "database": False}
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "model": True, "database": None}
+    assert response.headers["cache-control"] == "no-store"
 
 
-def test_not_ready_when_the_model_and_the_database_are_both_missing(client, replace_state):
+def test_without_database_url_the_probe_is_not_asked(client, replace_state):
+    class UnusedProbe:
+        async def reachable(self, database):
+            raise AssertionError("the database is not configured, so it is not checked")
+
+    replace_state("readiness", UnusedProbe())
+
+    assert client.get("/health/ready").status_code == 200
+
+
+def test_not_ready_without_a_model_even_without_database_url(client, replace_state):
     replace_state("classifier", None)
 
-    assert client.get("/health/ready").json() == {
-        "status": "not_ready",
-        "model": False,
-        "database": False,
-    }
+    response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "model": False, "database": None}
 
 
 def test_a_database_that_does_not_answer_is_given_up_after_the_timeout(
@@ -322,3 +333,9 @@ def test_openapi_describes_both_health_paths(client):
     readiness = client.get("/openapi.json").json()["components"]["schemas"]["ReadinessResponse"]
     assert set(readiness["properties"]) == {"status", "model", "database"}
     assert readiness["properties"]["status"]["enum"] == ["ready", "not_ready"]
+    assert readiness["properties"]["model"]["type"] == "boolean"
+    # null: the database is not used (DATABASE_URL is not set).
+    database = readiness["properties"]["database"]
+    assert database["anyOf"] == [{"type": "boolean"}, {"type": "null"}]
+    assert "null" in database["description"]
+    assert set(readiness["required"]) == {"status", "model", "database"}
