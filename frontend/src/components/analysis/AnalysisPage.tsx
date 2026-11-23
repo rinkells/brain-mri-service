@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 
 import { predict } from '../../api/client'
 import type { PredictionResponse } from '../../api/types'
+import { useAuth } from '../../hooks/useAuth'
 import { useImageSelection } from '../../hooks/useImageSelection'
 import { validateImageFile } from '../../lib/validation'
 import { ResultPanel } from '../result/ResultPanel'
@@ -22,6 +23,7 @@ export function AnalysisPage() {
   const [gradcam, setGradcam] = useState(false)
   const [request, setRequest] = useState<RequestState>({ status: 'idle' })
   const controllerRef = useRef<AbortController | null>(null)
+  const { auth } = useAuth()
 
   useEffect(() => () => controllerRef.current?.abort(), [])
 
@@ -94,7 +96,11 @@ export function AnalysisPage() {
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         {request.status === 'success' ? (
-          <ResultPanel result={request.result} scanUrl={request.scanUrl} />
+          <ResultPanel
+            result={request.result}
+            scanUrl={request.scanUrl}
+            signedIn={auth.status === 'signed-in'}
+          />
         ) : (
           <div className="flex h-full min-h-64 items-center justify-center text-center text-slate-500 dark:text-slate-400">
             {request.status === 'loading'

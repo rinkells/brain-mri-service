@@ -1,16 +1,38 @@
+import { useState } from 'react'
+
 import { AnalysisPage } from './components/analysis/AnalysisPage'
+import { AccountArea } from './components/auth/AccountArea'
+import { AuthPage } from './components/auth/AuthPage'
+import { AuthProvider } from './components/auth/AuthProvider'
+import { NoticeBanner } from './components/auth/NoticeBanner'
+import { SignInPrompt } from './components/auth/SignInPrompt'
 import { HistoryPage } from './components/history/HistoryPage'
 import { ViewTabs } from './components/layout/ViewTabs'
 import { HealthIndicator } from './components/status/HealthIndicator'
 import { ThemeToggle } from './components/theme/ThemeToggle'
+import { useAuth } from './hooks/useAuth'
 import { useHealth } from './hooks/useHealth'
 import { useTheme } from './hooks/useTheme'
-import { useView } from './hooks/useView'
+import { VIEW_HASH, isContentView, useView, type ContentView } from './hooks/useView'
 
 export default function App() {
+  return (
+    <AuthProvider>
+      <Shell />
+    </AuthProvider>
+  )
+}
+
+function Shell() {
   const health = useHealth()
   const { theme, toggleTheme } = useTheme()
   const view = useView()
+  const { auth, resetCount } = useAuth()
+  // The page to return to after signing in: the last one that was not a sign-in page.
+  const [lastContentView, setLastContentView] = useState<ContentView>('analysis')
+  if (isContentView(view) && view !== lastContentView) {
+    setLastContentView(view)
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -23,20 +45,27 @@ export default function App() {
             </p>
           </div>
           <ViewTabs current={view} />
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <HealthIndicator health={health} />
             <ThemeToggle theme={theme} onToggle={toggleTheme} />
+            <AccountArea />
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6">
-        {/* Kept mounted while hidden, so the chosen scan and result survive a visit to History. */}
+        <NoticeBanner />
+        {/* Kept mounted while hidden, so the chosen scan and result survive a visit to
+            History. Signing out or deleting the account starts it afresh (resetCount). */}
         <div hidden={view !== 'analysis'}>
-          <AnalysisPage />
+          <AnalysisPage key={resetCount} />
         </div>
-        {/* Mounted on each visit, so the history is always fresh. */}
-        {view === 'history' && <HistoryPage />}
+        {/* Mounted on each visit, so the history is always fresh and is gone from memory
+            as soon as the user leaves it or signs out. */}
+        {view === 'history' && <HistoryView status={auth.status} />}
+        {(view === 'login' || view === 'register') && (
+          <AuthPage mode={view} returnHash={VIEW_HASH[lastContentView]} />
+        )}
       </main>
 
       <footer className="mx-auto max-w-6xl px-4 pb-8 text-xs text-slate-500 dark:text-slate-400">
@@ -45,4 +74,11 @@ export default function App() {
       </footer>
     </div>
   )
+}
+
+function HistoryView({ status }: { status: 'loading' | 'anonymous' | 'signed-in' }) {
+  if (status === 'loading') {
+    return <p className="text-center text-slate-500 dark:text-slate-400">Перевіряємо вхід…</p>
+  }
+  return status === 'signed-in' ? <HistoryPage /> : <SignInPrompt />
 }

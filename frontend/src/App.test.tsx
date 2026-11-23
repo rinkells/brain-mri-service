@@ -11,6 +11,7 @@ import {
   makePrediction,
   makeRecord,
   makeStats,
+  makeUser,
   mockApi,
   predictCalls,
 } from './test/fixtures'
@@ -348,8 +349,11 @@ describe('saving to history', () => {
     expect(await screen.findByText(/Результат збережено в історії/)).toBeInTheDocument()
   })
 
-  test('says when the result could not be saved', async () => {
-    mockApi({ predict: () => jsonResponse(makePrediction({ id: null })) })
+  test('says when the result of a signed-in user could not be saved', async () => {
+    mockApi({
+      me: () => jsonResponse(makeUser()),
+      predict: () => jsonResponse(makePrediction({ id: null })),
+    })
 
     await analyze()
 
@@ -359,8 +363,10 @@ describe('saving to history', () => {
 })
 
 describe('pages', () => {
+  // The history is for signed-in users (an anonymous visitor: see App.auth.test.tsx).
   function mockHistory() {
     return mockApi({
+      me: () => jsonResponse(makeUser()),
       predict: () => jsonResponse(makePrediction()),
       predictions: () => jsonResponse(makePage([makeRecord(1)])),
       stats: () => jsonResponse(makeStats()),
