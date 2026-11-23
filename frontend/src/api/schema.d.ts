@@ -874,6 +874,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Тіло запиту більше за 8 КіБ */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Тіло не є JSON-об'єктом із текстовими username і password; для реєстрації ще й ім'я чи пароль не відповідають вимогам (текст пояснює, що саме) */
             422: {
                 headers: {
@@ -938,6 +947,15 @@ export interface operations {
             };
             /** @description Origin не входить до ALLOWED_ORIGINS; або запит надсилає cookie сесії без заголовка Origin (захист від CSRF); або це запит зі сторінки іншого сайту (Sec-Fetch-Site) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Тіло запиту більше за 8 КіБ */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1103,6 +1121,15 @@ export interface operations {
             };
             /** @description Неправильний пароль; або Origin не входить до ALLOWED_ORIGINS чи його немає (див. інші запити, що змінюють дані) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Тіло запиту більше за 8 КіБ */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
