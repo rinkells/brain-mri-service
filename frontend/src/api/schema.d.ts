@@ -11,8 +11,31 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Стан сервісу */
+        /**
+         * Стан процесу (liveness)
+         * @description Liveness: процес працює й відповідає. Базу не опитує, тож відповідає 200, навіть коли Postgres недоступний; заодно повертає пристрій, класи й версію моделі для інтерфейсу. Не обмежується лімітом, не потребує сесії й не відхиляється перевіркою запитів зі сторінок інших сайтів. Готовність до роботи перевіряє GET /health/ready.
+         */
         get: operations["health_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Готовність до роботи (readiness)
+         * @description Readiness: сервіс готовий до повної роботи — модель завантажена, а база відповіла на SELECT 1 не довше ніж за 2 с (без DATABASE_URL база вважається недоступною). Тоді 200 і status=ready, інакше 503 і status=not_ready; поля model і database кажуть, що саме не готове, без тексту помилки. Цим шляхом перевіряє стан сервісу api Docker Compose. Не обмежується лімітом, не потребує сесії, не відхиляється перевіркою запитів зі сторінок інших сайтів і не кешується (Cache-Control: no-store).
+         */
+        get: operations["ready_health_ready_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -362,6 +385,25 @@ export interface components {
              */
             message: string;
         };
+        /** ReadinessResponse */
+        ReadinessResponse: {
+            /**
+             * Status
+             * @description ready, коли модель завантажена й база відповідає; інакше not_ready
+             * @enum {string}
+             */
+            status: "ready" | "not_ready";
+            /**
+             * Model
+             * @description Модель завантажена
+             */
+            model: boolean;
+            /**
+             * Database
+             * @description База відповіла на SELECT 1 за 2 с; false також тоді, коли DATABASE_URL не задано
+             */
+            database: boolean;
+        };
         /** StatsResponse */
         StatsResponse: {
             /**
@@ -451,6 +493,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+        };
+    };
+    ready_health_ready_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Модель завантажена, база відповідає */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessResponse"];
+                };
+            };
+            /** @description Модель не завантажена або база не відповіла за 2 с */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadinessResponse"];
                 };
             };
         };
