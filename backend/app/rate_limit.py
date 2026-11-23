@@ -19,13 +19,13 @@ from app.addresses import IPAddress, parse_address
 from app.errors import RATE_LIMITED, error_response
 from app.config import Settings
 from app.schemas import ErrorResponse
+from app.security import HEALTH_PATHS
 
 WINDOW_S = 60.0
 # Upper bound on the clients tracked at once, per bucket.
 MAX_KEYS = 10_000
 # The prefix an IPv6 client usually gets for itself: all of it counts as one client.
 IPV6_PREFIX = 64
-HEALTH_PATH = "/health"
 # The strict auth bucket: only the requests that check a password to let someone in.
 # GET /auth/me runs on every page load and is an ordinary read; POST /auth/logout and
 # DELETE /auth/me are ordinary writes (DELETE /auth/me also counts wrong passwords).
@@ -188,9 +188,9 @@ def build_login_failures(
 
 
 def bucket_of(method: str, path: str) -> str | None:
-    """Which limit a request counts against; None for /health, which is never limited
-    (the container healthchecks call it)."""
-    if path == HEALTH_PATH:
+    """Which limit a request counts against; None for /health and /health/ready, which
+    are never limited (the container healthchecks call them)."""
+    if path in HEALTH_PATHS:
         return None
     if (method, path) in AUTH_BUCKET_ROUTES:
         return "auth"

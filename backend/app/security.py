@@ -21,6 +21,11 @@ SECURITY_HEADERS = {
 # Responses with a user's data; neither the browser nor a proxy keeps them.
 NO_STORE = {"Cache-Control": "no-store"}
 AUTH_PREFIX = "/auth/"
+# Liveness and readiness. The container healthchecks ask them, so neither is rate limited
+# nor checked for cross-site requests, and neither needs a session; they reveal nothing.
+HEALTH_PATH = "/health"
+READY_PATH = "/health/ready"
+HEALTH_PATHS = frozenset({HEALTH_PATH, READY_PATH})
 
 
 def is_history_path(path: str) -> bool:
@@ -85,8 +90,8 @@ MISSING_ORIGIN_DETAIL = (
 )
 STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
-# 403 in the API description: every route but /health can get it from the cross-site
-# check, and routes that change data from the Origin checks too.
+# 403 in the API description: every route but /health and /health/ready can get it from
+# the cross-site check, and routes that change data from the Origin checks too.
 FORBIDDEN_READ_RESPONSE = {
     403: {
         "model": ErrorResponse,
@@ -146,8 +151,8 @@ CROSS_SITE_DETAIL = (
 )
 # Sec-Fetch-Site values of requests made by a page of another site.
 FOREIGN_SITES = frozenset({"cross-site", "same-site"})
-# Never checked: the container healthchecks call it, and it reveals nothing.
-UNCHECKED_PATHS = frozenset({"/health"})
+# Never checked: see HEALTH_PATHS.
+UNCHECKED_PATHS = HEALTH_PATHS
 
 
 class CrossSiteCheckMiddleware:
