@@ -395,6 +395,7 @@ def test_auth_settings_reach_the_api_with_the_python_defaults(services):
         "SESSION_TTL_HOURS",
         "SESSION_COOKIE_NAME",
         "SESSION_COOKIE_SECURE",
+        "SESSION_MAX_PER_USER",
         "LOGIN_FAILURES_MAX",
         "LOGIN_FAILURES_WINDOW_MINUTES",
     }

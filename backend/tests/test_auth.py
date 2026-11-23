@@ -968,3 +968,33 @@ def test_the_8_kib_limit_is_only_for_auth(app, browser):
     scan = {"file": ("scan.png", image_bytes(512, 512) + b"\0" * 64 * 1024, "image/png")}
 
     assert browser.post("/predict", files=scan).status_code == 200
+
+
+# --- At most SESSION_MAX_PER_USER sessions per user ------------------------------------
+
+
+def test_a_user_keeps_at_most_ten_sessions(app, database, password_hash):
+    add_user(database, "alice", password_hash)
+    add_user(database, "bob", password_hash)
+    bob_tokens = [token_of(login(new_browser(app), "bob")) for _ in range(2)]
+
+    tokens = [token_of(login(new_browser(app), "alice")) for _ in range(12)]
+
+    alice_sessions = {session_id_of(token) for token in tokens}
+    stored = {row.id for row in sessions(database)}
+    assert stored & alice_sessions == {session_id_of(token) for token in tokens[-10:]}
+    assert {session_id_of(token) for token in bob_tokens} <= stored
+    for oldest in tokens[:2]:
+        assert holding(app, oldest).get("/auth/me").json() == SESSION_EXPIRED
+    assert holding(app, tokens[2]).get("/auth/me").status_code == 200
+    assert holding(app, tokens[-1]).get("/auth/me").status_code == 200
+
+
+def test_registration_counts_towards_the_sessions_of_a_user(app, browser, database, settings_of):
+    settings_of(session_max_per_user=2)
+    first = token_of(register(browser, "alice"))
+
+    later = [token_of(login(new_browser(app), "alice")) for _ in range(2)]
+
+    assert {row.id for row in sessions(database)} == {session_id_of(token) for token in later}
+    assert holding(app, first).get("/auth/me").json() == SESSION_EXPIRED

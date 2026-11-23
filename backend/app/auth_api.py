@@ -133,6 +133,7 @@ async def begin_session(request: Request, response: Response, user: SessionUser)
         user.id,
         settings.session_ttl,
         session_cookie(request.scope),
+        settings.session_max_per_user,
     )
     set_session_cookie(response, token, settings)
 

@@ -36,6 +36,7 @@ ENV_VARS = (
     "SESSION_TTL_HOURS",
     "SESSION_COOKIE_NAME",
     "SESSION_COOKIE_SECURE",
+    "SESSION_MAX_PER_USER",
     "LOGIN_FAILURES_MAX",
     "LOGIN_FAILURES_WINDOW_MINUTES",
 )
@@ -375,6 +376,7 @@ def test_auth_defaults():
     assert settings.session_cookie_name == "brain_mri_session"
     # Plain HTTP on localhost: a Secure cookie would never be sent back.
     assert settings.session_cookie_secure is False
+    assert settings.session_max_per_user == 10
     assert settings.rate_limit_auth_per_minute == 10
     assert (settings.login_failures_max, settings.login_failures_window_minutes) == (5, 15)
 
@@ -383,6 +385,7 @@ def test_auth_settings_are_read_from_the_environment(monkeypatch):
     monkeypatch.setenv("SESSION_TTL_HOURS", "12")
     monkeypatch.setenv("SESSION_COOKIE_NAME", "__Host-mri")
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("SESSION_MAX_PER_USER", "3")
     monkeypatch.setenv("RATE_LIMIT_AUTH_PER_MINUTE", "4")
     monkeypatch.setenv("LOGIN_FAILURES_MAX", "3")
     monkeypatch.setenv("LOGIN_FAILURES_WINDOW_MINUTES", "30")
@@ -392,6 +395,7 @@ def test_auth_settings_are_read_from_the_environment(monkeypatch):
     assert settings.session_ttl == timedelta(hours=12)
     assert settings.session_cookie_name == "__Host-mri"
     assert settings.session_cookie_secure is True
+    assert settings.session_max_per_user == 3
     assert settings.rate_limit_auth_per_minute == 4
     assert (settings.login_failures_max, settings.login_failures_window_minutes) == (3, 30)
 
@@ -409,6 +413,7 @@ def test_auth_settings_are_read_from_the_environment(monkeypatch):
         ("SESSION_COOKIE_NAME", "__Host-mri"),
         ("SESSION_COOKIE_NAME", "__Secure-mri"),
         ("SESSION_COOKIE_SECURE", "sometimes"),
+        ("SESSION_MAX_PER_USER", "0"),
         ("RATE_LIMIT_AUTH_PER_MINUTE", "0"),
         ("LOGIN_FAILURES_MAX", "0"),
         ("LOGIN_FAILURES_WINDOW_MINUTES", "0"),
