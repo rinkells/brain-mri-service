@@ -1,12 +1,13 @@
 """Service configuration, read from environment variables and an optional .env file."""
 
 import ipaddress
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal, get_args
 from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.addresses import canonical_address
@@ -49,6 +50,10 @@ LOCAL_HOSTS = ("localhost", "127.0.0.1")
 DEFAULT_ALLOWED_ORIGINS = tuple(
     f"http://{host}:{port}" for port in (5173, 4173, 8000) for host in ("localhost", "127.0.0.1")
 )
+# Characters of a cookie name (an RFC 6265 token) that need no quoting anywhere.
+COOKIE_NAME_PATTERN = r"^[A-Za-z0-9_.\-]{1,64}$"
+# Browsers drop a cookie with one of these prefixes unless it is Secure.
+SECURE_ONLY_COOKIE_PREFIXES = ("__Host-", "__Secure-")
 
 
 def comma_separated(value: object) -> object:
@@ -64,7 +69,9 @@ class Settings(BaseSettings):
     NOT_MRI_COLOR_MAX, NOT_MRI_NOISE_MAX, NOT_MRI_STD_MIN, NOT_MRI_LOWCONTRAST_STD,
     NOT_MRI_DARK_MIN, NOT_MRI_OPAQUE_MIN, DATABASE_URL, ALLOWED_HOSTS, ALLOWED_ORIGINS,
     ENABLE_DOCS, RATE_LIMIT_ENABLED, RATE_LIMIT_PREDICT_PER_MINUTE, RATE_LIMIT_WRITE_PER_MINUTE,
-    RATE_LIMIT_READ_PER_MINUTE and TRUSTED_PROXIES."""
+    RATE_LIMIT_READ_PER_MINUTE, RATE_LIMIT_AUTH_PER_MINUTE, TRUSTED_PROXIES, SESSION_TTL_HOURS,
+    SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, LOGIN_FAILURES_MAX and
+    LOGIN_FAILURES_WINDOW_MINUTES."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -117,15 +124,28 @@ class Settings(BaseSettings):
     )
     # Serve Swagger UI (/docs), ReDoc (/redoc) and the schema (/openapi.json).
     enable_docs: bool = True
-    # Requests per client in any 60 s: POST /predict, other writes (DELETE), reads (GET).
-    # Above the limit the API answers 429 with Retry-After; /health is never limited.
+    # Requests per client in any 60 s: POST /predict, other writes (DELETE), reads (GET),
+    # and every request to /auth/*. Above the limit the API answers 429 with Retry-After;
+    # /health is never limited.
     rate_limit_enabled: bool = True
     rate_limit_predict_per_minute: int = Field(default=10, gt=0)
     rate_limit_write_per_minute: int = Field(default=30, gt=0)
     rate_limit_read_per_minute: int = Field(default=120, gt=0)
+    rate_limit_auth_per_minute: int = Field(default=10, gt=0)
     # Addresses of reverse proxies whose X-Real-IP header names the client (comma-separated).
     # Empty: the header is ignored and the client is the peer of the connection.
     trusted_proxies: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # How long a session lasts from sign-in; the cookie gets the same Max-Age.
+    session_ttl_hours: int = Field(default=168, gt=0)
+    session_cookie_name: str = Field(default="brain_mri_session", pattern=COOKIE_NAME_PATTERN)
+    # Send the cookie over HTTPS only. Off by default: the service runs on plain HTTP on
+    # localhost, where a Secure cookie would never come back.
+    session_cookie_secure: bool = False
+    # After LOGIN_FAILURES_MAX wrong passwords for one name from one address within
+    # LOGIN_FAILURES_WINDOW_MINUTES, sign-in answers 429 until the oldest leaves the window.
+    # Independent of RATE_LIMIT_ENABLED.
+    login_failures_max: int = Field(default=5, gt=0)
+    login_failures_window_minutes: int = Field(default=15, gt=0)
 
     @field_validator("allowed_hosts", "allowed_origins", "trusted_proxies", mode="before")
     @classmethod
@@ -173,9 +193,28 @@ class Settings(BaseSettings):
             checked.append(f"{parts.scheme}://{parts.netloc}".lower())
         return checked
 
+    @model_validator(mode="after")
+    def _check_cookie_prefix(self) -> "Settings":
+        if self.session_cookie_name.startswith(SECURE_ONLY_COOKIE_PREFIXES) and not (
+            self.session_cookie_secure
+        ):
+            raise ValueError(
+                f"SESSION_COOKIE_NAME {self.session_cookie_name!r} needs "
+                "SESSION_COOKIE_SECURE=true: browsers drop such a cookie otherwise"
+            )
+        return self
+
     @property
     def max_upload_bytes(self) -> int:
         return int(self.max_upload_mb * 1024 * 1024)
+
+    @property
+    def session_ttl(self) -> timedelta:
+        return timedelta(hours=self.session_ttl_hours)
+
+    @property
+    def login_failure_window_s(self) -> float:
+        return self.login_failures_window_minutes * 60.0
 
     @property
     def trusted_proxy_addresses(self) -> frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address]:

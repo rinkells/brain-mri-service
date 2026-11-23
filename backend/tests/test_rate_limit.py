@@ -7,6 +7,7 @@ import ipaddress
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 
+import argon2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,10 +16,18 @@ from app.rate_limit import (
     MAX_KEYS,
     SlidingWindowLimiter,
     bucket_of,
+    build_login_failures,
     build_rate_limiters,
     rate_limit_key,
 )
-from tests.helpers import encode_image, image_bytes, make_image
+from tests.helpers import (
+    TEST_ORIGIN,
+    TEST_PASSWORD,
+    add_user,
+    encode_image,
+    image_bytes,
+    make_image,
+)
 
 PROXY = "172.30.250.10"  # the frontend container in Compose
 GATEWAY = "172.30.250.128"  # direct connections to the published API port (seen in Compose)
@@ -202,6 +211,14 @@ def test_default_key_cap():
         ("GET", "/docs", "read"),
         ("GET", "/health", None),
         ("HEAD", "/health", None),
+        # Every /auth path, whatever the method, counts against the auth bucket only.
+        ("POST", "/auth/register", "auth"),
+        ("POST", "/auth/login", "auth"),
+        ("POST", "/auth/logout", "auth"),
+        ("GET", "/auth/me", "auth"),
+        ("DELETE", "/auth/me", "auth"),
+        ("GET", "/auth/no-such-path", "auth"),
+        ("GET", "/authors", "read"),
     ],
 )
 def test_bucket_of_a_request(method, path, bucket):
@@ -214,6 +231,7 @@ def test_limiters_follow_the_settings(settings):
             "rate_limit_predict_per_minute": 3,
             "rate_limit_write_per_minute": 4,
             "rate_limit_read_per_minute": 5,
+            "rate_limit_auth_per_minute": 6,
         }
     )
 
@@ -223,7 +241,43 @@ def test_limiters_follow_the_settings(settings):
         "predict": 3,
         "write": 4,
         "read": 5,
+        "auth": 6,
     }
+
+
+def test_the_failed_sign_in_limit_follows_the_settings(settings):
+    custom = settings.model_copy(
+        update={"login_failures_max": 7, "login_failures_window_minutes": 20}
+    )
+
+    limiter = build_login_failures(custom)
+
+    assert (limiter.limit, limiter.window_s) == (7, 20 * 60)
+
+
+def test_retry_after_looks_without_counting():
+    clock = FakeClock()
+    limiter = SlidingWindowLimiter(limit=2, window_s=60, clock=clock)
+
+    assert limiter.retry_after("a") == 0
+    limiter.hit("a")
+    clock.advance(10)
+    limiter.hit("a")
+
+    assert limiter.retry_after("a") == pytest.approx(50)
+    assert limiter.retry_after("a") == pytest.approx(50)
+    assert limiter.tracked("a") == 2
+    assert limiter.retry_after("unknown") == 0 and len(limiter) == 1
+
+
+def test_forget_starts_a_key_afresh():
+    limiter = SlidingWindowLimiter(limit=1, window_s=60, clock=FakeClock())
+    limiter.hit("a")
+
+    limiter.forget("a")
+    limiter.forget("never-seen")
+
+    assert limiter.hit("a") == 0
 
 
 # --- The client key ----------------------------------------------------------------
@@ -357,6 +411,7 @@ def limited(client):
         app.state.classifier,
         app.state.inference_limiter,
         getattr(app.state, "rate_limiters", None),
+        app.state.login_failures,
     )
 
     def use(**overrides):
@@ -364,13 +419,16 @@ def limited(client):
         clock = FakeClock()
         app.state.settings = settings
         app.state.rate_limiters = build_rate_limiters(settings, clock=clock)
+        app.state.login_failures = build_login_failures(settings, clock=clock)
         model = CountingClassifier(saved[1].device)
         app.state.classifier = model
         queue = CountingInferenceLimiter(saved[2])
         app.state.inference_limiter = queue
 
-        def connect(peer: str = "198.51.100.7") -> TestClient:
-            return TestClient(app, client=(peer, 40000))
+        def connect(peer: str = "198.51.100.7", origin: str | None = None) -> TestClient:
+            """A client from that address; with `origin`, it sends Origin like a page."""
+            headers = {"Origin": origin} if origin else None
+            return TestClient(app, client=(peer, 40000), headers=headers)
 
         return clock, model, queue, connect
 
@@ -380,6 +438,7 @@ def limited(client):
         app.state.classifier,
         app.state.inference_limiter,
         app.state.rate_limiters,
+        app.state.login_failures,
     ) = saved
 
 
@@ -584,7 +643,180 @@ def test_openapi_documents_429_on_every_limited_route(client):
         ("/predictions/{prediction_id}", "get"),
         ("/predictions/{prediction_id}", "delete"),
         ("/stats", "get"),
+        ("/auth/register", "post"),
+        ("/auth/login", "post"),
+        ("/auth/logout", "post"),
+        ("/auth/me", "get"),
+        ("/auth/me", "delete"),
     ]:
         response = paths[path][method]["responses"]["429"]
         assert "Retry-After" in response["headers"], (path, method)
     assert "429" not in paths["/health"]["get"]["responses"]
+
+
+# --- /auth/*: a bucket of their own, and failed sign-ins per name and address -----------
+
+WRONG = "wrong-horse-22"
+
+
+def too_many_failures(seconds: int) -> dict:
+    return {"detail": f"Забагато невдалих спроб входу. Спробуйте ще раз через {seconds} с."}
+
+
+@pytest.fixture
+def accounts(use_database, database, password_hash):
+    """The shared app with a database that holds alice (password TEST_PASSWORD).
+
+    use_database runs before `limited`, so the fake clock of `limited` drives the count
+    of failed sign-ins.
+    """
+    use_database(database)
+    add_user(database, "alice", password_hash)
+    return database
+
+
+def login(client, username="alice", password=TEST_PASSWORD, **headers):
+    return client.post(
+        "/auth/login",
+        json={"username": username, "password": password},
+        headers=headers or None,
+    )
+
+
+def test_auth_requests_have_their_own_bucket(accounts, limited):
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=3)
+    browser = connect(origin=TEST_ORIGIN)
+
+    assert login(browser).status_code == 200
+    assert browser.get("/auth/me").status_code == 200
+    assert browser.post("/auth/logout").status_code == 204
+    refused = browser.post("/auth/register", json={"username": "bob", "password": TEST_PASSWORD})
+
+    assert refused.status_code == 429
+    assert refused.headers["Retry-After"] == "60"
+    assert refused.json() == {"detail": "Забагато запитів. Спробуйте ще раз через 60 с."}
+    assert refused.headers["cache-control"] == "no-store"
+    # The other buckets are untouched.
+    assert post_scan(browser).status_code == 200
+    assert browser.get("/predictions").status_code == 401
+    clock.advance(60)
+    assert login(browser).status_code == 200
+
+
+def test_auth_refusals_by_origin_do_not_count(accounts, limited):
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=1)
+    browser = connect()
+
+    for _ in range(3):
+        assert login(browser, Origin="https://evil.example").status_code == 403
+    assert login(browser).status_code == 200
+    assert login(connect()).status_code == 429
+
+
+def test_failed_logins_are_limited_per_name_and_address(accounts, limited):
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=1000)
+
+    for _ in range(5):
+        clock.advance(60)
+        assert login(connect(), password=WRONG).status_code == 401
+    refused = login(connect())  # the right password, but too late
+
+    # The first failure was 4 minutes ago: it leaves the 15-minute window in 11.
+    assert refused.status_code == 429
+    assert refused.headers["Retry-After"] == "660"
+    assert refused.json() == too_many_failures(660)
+    assert "set-cookie" not in refused.headers
+    # Another name from this address, and this name from another address, go on.
+    assert login(connect(), "bob", WRONG).status_code == 401
+    assert login(connect("198.51.100.8")).status_code == 200
+    clock.advance(660)
+    assert login(connect()).status_code == 200
+
+
+def test_unknown_names_are_limited_like_real_ones(accounts, limited):
+    """Otherwise the limit itself would tell which names exist."""
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=1000)
+
+    for name in ("alice", "nobody"):
+        for _ in range(5):
+            assert login(connect(), name, WRONG).status_code == 401
+        assert login(connect(), name, WRONG).json() == too_many_failures(900)
+
+
+def test_the_case_of_the_name_does_not_open_a_new_window(accounts, limited):
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=1000)
+
+    for name in ("alice", "ALICE", "Alice", "aLiCe", "alicE"):
+        assert login(connect(), name, WRONG).status_code == 401
+
+    assert login(connect(), "ALIce").status_code == 429
+
+
+def test_a_successful_login_forgets_the_earlier_failures(accounts, limited):
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=1000)
+    for _ in range(4):
+        login(connect(), password=WRONG)
+
+    assert login(connect()).status_code == 200
+
+    assert [login(connect(), password=WRONG).status_code for _ in range(6)] == [401] * 5 + [429]
+
+
+def test_failed_logins_are_limited_even_with_rate_limiting_off(accounts, limited):
+    clock, model, queue, connect = limited(rate_limit_enabled=False)
+
+    for _ in range(5):
+        login(connect(), password=WRONG)
+
+    assert login(connect()).status_code == 429
+
+
+def test_a_refused_attempt_checks_no_password(accounts, limited, monkeypatch):
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=1000)
+    for _ in range(5):
+        login(connect(), password=WRONG)
+    checked = []
+    real_verify = argon2.PasswordHasher.verify
+
+    def spy(self, hash, password):
+        checked.append(hash)
+        return real_verify(self, hash, password)
+
+    monkeypatch.setattr(argon2.PasswordHasher, "verify", spy)
+
+    assert login(connect()).status_code == 429
+    assert checked == []
+
+
+def test_wrong_passwords_for_deleting_the_account_count_as_failures(accounts, limited):
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=1000)
+    browser = connect(origin=TEST_ORIGIN)
+    login(browser)
+
+    def delete_account(password):
+        return browser.request("DELETE", "/auth/me", json={"password": password})
+
+    assert [delete_account(WRONG).status_code for _ in range(5)] == [403] * 5
+    assert delete_account(TEST_PASSWORD).status_code == 429
+    assert login(connect()).status_code == 429
+    assert browser.get("/auth/me").status_code == 200
+
+
+def test_failed_logins_count_by_the_address_the_proxy_names(accounts, limited):
+    clock, model, queue, connect = limited(
+        rate_limit_auth_per_minute=1000, trusted_proxies=[PROXY]
+    )
+
+    for _ in range(5):
+        login(connect(PROXY), password=WRONG, **{"X-Real-IP": "203.0.113.1"})
+
+    assert login(connect(PROXY), **{"X-Real-IP": "203.0.113.1"}).status_code == 429
+    assert login(connect(PROXY), **{"X-Real-IP": "203.0.113.2"}).status_code == 200
+
+
+def test_a_huge_name_does_not_grow_the_table_of_failures(accounts, limited, client):
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=1000)
+
+    assert login(connect(), "x" * 100_000, WRONG).status_code == 401
+
+    assert all(len(key) < 200 for key in client.app.state.login_failures._hits)

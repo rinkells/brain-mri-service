@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Annotated
 
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import make_url
 from sqlalchemy.exc import DataError, OperationalError
@@ -26,6 +27,9 @@ from app.config import (
     Settings,
     get_settings,
 )
+from app.auth import SESSION_USER, Passwords, SessionUser
+from app.auth_api import body_validation_error_handler
+from app.auth_api import router as auth_router
 from app.database import Database
 from app.gradcam import encode_png_base64, overlay_heatmap
 from app.history import save_prediction
@@ -34,7 +38,13 @@ from app.history_api import router as history_router
 from app.input_check import ImageFeatures, NotMriThresholds, compute_features, looks_not_mri
 from app.limiter import InferenceLimiter, ServiceBusyError
 from app.model import BrainMRIClassifier, Prediction
-from app.rate_limit import RATE_LIMITED_RESPONSE, RateLimitMiddleware, build_rate_limiters
+from app.rate_limit import (
+    RATE_LIMITED_RESPONSE,
+    RateLimitMiddleware,
+    build_login_failures,
+    build_rate_limiters,
+)
+from app.sessions import SessionMiddleware
 from app.preprocessing import (
     ImageTooLargeError,
     NotAnImageError,
@@ -50,6 +60,7 @@ from app.schemas import (
     PredictionWarning,
 )
 from app.security import (
+    FORBIDDEN_WRITE_RESPONSE,
     CrossSiteCheckMiddleware,
     OriginCheckMiddleware,
     SecurityHeadersMiddleware,
@@ -114,6 +125,14 @@ router = APIRouter()
 
 ERROR_RESPONSES = {
     400: {"model": ErrorResponse, "description": "Файл не є зображенням або пошкоджений"},
+    401: {
+        "model": ErrorResponse,
+        "description": (
+            "Cookie сесії недійсна або сесія закінчилася (відповідь видаляє cookie): прогноз "
+            "не зберігся б, тож його не виконано. Без cookie прогноз працює анонімно"
+        ),
+    },
+    **FORBIDDEN_WRITE_RESPONSE,
     413: {"model": ErrorResponse, "description": "Файл або зображення завелике"},
     415: {
         "model": ErrorResponse,
@@ -204,6 +223,8 @@ async def predict(
     settings: Settings = request.app.state.settings
     classifier: BrainMRIClassifier = request.app.state.classifier
     limiter: InferenceLimiter = request.app.state.inference_limiter
+    # Found by SessionMiddleware before the file was read; None for an anonymous request.
+    user: SessionUser | None = request.scope.get(SESSION_USER)
 
     data = await file.read(settings.max_upload_bytes + 1)
     if len(data) > settings.max_upload_bytes:
@@ -233,22 +254,27 @@ async def predict(
     warnings = [warning for warning in candidates if warning is not None]
     latency_ms = (time.perf_counter() - started) * 1000
 
-    # Only the outcome is stored: never the scan itself or its file name. Saving runs in a
-    # worker thread, because reaching a database that is down can take seconds.
-    prediction_id = await run_in_threadpool(
-        save_prediction,
-        request.app.state.database,
-        PredictionRecord(
-            predicted_class=prediction.predicted_class,
-            probabilities=prediction.probabilities,
-            image_width=analysis.width,
-            image_height=analysis.height,
-            warnings=[w.model_dump() for w in warnings],
-            gradcam_requested=gradcam,
-            latency_ms=latency_ms,
-            model_version=settings.model_version,
-        ),
-    )
+    # Saved only for a signed-in user, as that user's record; an anonymous prediction is
+    # answered and forgotten. Only the outcome is stored: never the scan itself or its
+    # file name. Saving runs in a worker thread, because reaching a database that is down
+    # can take seconds.
+    prediction_id = None
+    if user is not None:
+        prediction_id = await run_in_threadpool(
+            save_prediction,
+            request.app.state.database,
+            PredictionRecord(
+                user_id=user.id,
+                predicted_class=prediction.predicted_class,
+                probabilities=prediction.probabilities,
+                image_width=analysis.width,
+                image_height=analysis.height,
+                warnings=[w.model_dump() for w in warnings],
+                gradcam_requested=gradcam,
+                latency_ms=latency_ms,
+                model_version=settings.model_version,
+            ),
+        )
 
     return PredictionResponse(
         id=prediction_id,
@@ -328,6 +354,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.inference_limiter = InferenceLimiter(
             settings.max_concurrent_inferences, settings.max_queue
         )
+        # argon2id hashing in worker threads; the dummy hash (~0.1 s) is made once here.
+        app.state.passwords = await Passwords.create()
         logger.info(
             "Model %s loaded from %s on %s",
             settings.model_version,
@@ -362,14 +390,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.rate_limiters = build_rate_limiters(settings)
-    # The middleware added last runs first: the Host is checked, then the Origin, then
-    # whether a page of another site sent it, then the rate limit, and only then is the
-    # body read.
+    app.state.login_failures = build_login_failures(settings)
+    # The middleware added last runs first: the Host is checked, then the Origin (with the
+    # session cookie, an Origin is required for writes), then whether a page of another
+    # site sent it, then the rate limit, then the session, and only then is the body read.
     app.add_middleware(
         MaxBodySizeMiddleware,
         max_bytes=settings.max_upload_bytes + MULTIPART_OVERHEAD_BYTES,
         detail=file_too_large_detail(settings),
     )
+    app.add_middleware(SessionMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(CrossSiteCheckMiddleware, allowed_origins=settings.allowed_origins)
     app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.allowed_origins)
@@ -381,8 +411,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(OperationalError, database_unavailable_handler)
     app.add_exception_handler(PoolTimeoutError, database_unavailable_handler)
     app.add_exception_handler(DataError, database_data_error_handler)
+    # Bodies of /auth/* that cannot be parsed get 422 without the values they held.
+    app.add_exception_handler(RequestValidationError, body_validation_error_handler)
     app.include_router(router)
     app.include_router(history_router)
+    app.include_router(auth_router)
     return app
 
 

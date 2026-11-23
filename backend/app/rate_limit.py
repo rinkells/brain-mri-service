@@ -1,4 +1,5 @@
-"""Requests per client per minute: refused with 429 above the limit.
+"""Requests per client per minute, and failed sign-ins per name and client: refused
+with 429 above the limit.
 
 The counts live in the memory of this one process. With several worker processes or
 several API containers each would count on its own; that needs a shared store
@@ -25,19 +26,34 @@ MAX_KEYS = 10_000
 # The prefix an IPv6 client usually gets for itself: all of it counts as one client.
 IPV6_PREFIX = 64
 HEALTH_PATH = "/health"
+AUTH_PREFIX = "/auth/"
 READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# A name longer than any valid one cannot belong to a user; only this much of it is
+# kept as part of a key, so huge names cannot fill the memory.
+FAILURE_KEY_NAME_LENGTH = 64
 
 
 def too_many_requests_detail(seconds: int) -> str:
     return f"Забагато запитів. Спробуйте ще раз через {seconds} с."
 
 
+def too_many_failures_detail(seconds: int) -> str:
+    return f"Забагато невдалих спроб входу. Спробуйте ще раз через {seconds} с."
+
+
+def retry_after_seconds(wait: float) -> int:
+    """Whole seconds for a Retry-After header, at least 1."""
+    return max(1, math.ceil(wait))
+
+
 RATE_LIMITED_RESPONSE = {
     429: {
         "model": ErrorResponse,
         "description": (
-            "Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок "
-            "Retry-After каже, через скільки секунд повторити"
+            "Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу "
+            "й видалення облікового запису ще й забагато неправильних паролів для цього "
+            "імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через "
+            "скільки секунд повторити"
         ),
         "headers": {
             "Retry-After": {
@@ -85,6 +101,22 @@ class SlidingWindowLimiter:
         times = self._hits.get(key)
         return len(times) if times is not None else 0
 
+    def retry_after(self, key: str) -> float:
+        """What hit() would return, without counting anything: 0 while the key is under
+        its limit, otherwise the seconds until one more would be allowed."""
+        times = self._hits.get(key)
+        if times is None:
+            return 0.0
+        now = self._clock()
+        self._expire(times, now)
+        if len(times) >= self.limit:
+            return times[0] + self.window_s - now
+        return 0.0
+
+    def forget(self, key: str) -> None:
+        """Drop everything counted for the key."""
+        self._hits.pop(key, None)
+
     def hit(self, key: str) -> float:
         """Count a request. Returns 0 when it is allowed, otherwise the seconds until
         the oldest request in the window leaves it and one more would be allowed."""
@@ -126,8 +158,19 @@ def build_rate_limiters(
         "predict": settings.rate_limit_predict_per_minute,
         "write": settings.rate_limit_write_per_minute,
         "read": settings.rate_limit_read_per_minute,
+        "auth": settings.rate_limit_auth_per_minute,
     }
     return {name: SlidingWindowLimiter(limit, clock=clock) for name, limit in limits.items()}
+
+
+def build_login_failures(
+    settings: Settings, clock: Callable[[], float] = time.monotonic
+) -> SlidingWindowLimiter:
+    """Wrong passwords per (name, client): at most LOGIN_FAILURES_MAX within
+    LOGIN_FAILURES_WINDOW_MINUTES. Only failures are counted (see app.auth_api)."""
+    return SlidingWindowLimiter(
+        settings.login_failures_max, window_s=settings.login_failure_window_s, clock=clock
+    )
 
 
 def bucket_of(method: str, path: str) -> str | None:
@@ -135,6 +178,8 @@ def bucket_of(method: str, path: str) -> str | None:
     (the container healthchecks call it)."""
     if path == HEALTH_PATH:
         return None
+    if path.startswith(AUTH_PREFIX):
+        return "auth"
     if method == "POST" and path == "/predict":
         return "predict"
     if method in READ_METHODS:
@@ -149,13 +194,14 @@ def _address_key(address: IPAddress) -> str:
 
 
 def rate_limit_key(scope: Scope, trusted_proxies: frozenset[IPAddress]) -> str:
-    """The key a request is counted under: for now the client's address.
+    """The key a request is counted under: the client's address, signed in or not.
 
-    With sign-in this is the place to use the user's id instead. The address is the
-    peer of the connection; only when that peer is one of TRUSTED_PROXIES is the
-    client taken from its X-Real-IP header. A header the proxy sends malformed (nginx
-    never does) is ignored, and the request counts against the proxy's own address.
-    IPv4-mapped addresses count as IPv4, and IPv6 clients are grouped by their /64 prefix.
+    The limit is checked before the session (which needs the database), so it cannot
+    depend on the user. The address is the peer of the connection; only when that peer
+    is one of TRUSTED_PROXIES is the client taken from its X-Real-IP header. A header
+    the proxy sends malformed (nginx never does) is ignored, and the request counts
+    against the proxy's own address. IPv4-mapped addresses count as IPv4, and IPv6
+    clients are grouped by their /64 prefix.
     """
     client = scope.get("client")
     host = client[0] if client else None
@@ -168,6 +214,14 @@ def rate_limit_key(scope: Scope, trusted_proxies: frozenset[IPAddress]) -> str:
     if address is None:
         return host or "unknown"
     return _address_key(address)
+
+
+def login_failure_key(username: str, scope: Scope, trusted_proxies: frozenset[IPAddress]) -> str:
+    """Failed sign-ins are counted per name (without regard to case, as names are
+    unique) and client address, so guessing one user's password from one place stops
+    without locking that user out everywhere."""
+    name = username.lower()[:FAILURE_KEY_NAME_LENGTH]
+    return f"{rate_limit_key(scope, trusted_proxies)} {name}"
 
 
 class RateLimitMiddleware:
@@ -191,7 +245,7 @@ class RateLimitMiddleware:
                 key = rate_limit_key(scope, settings.trusted_proxy_addresses)
                 wait = state.rate_limiters[bucket].hit(key)
                 if wait > 0:
-                    seconds = max(1, math.ceil(wait))
+                    seconds = retry_after_seconds(wait)
                     response = JSONResponse(
                         {"detail": too_many_requests_detail(seconds)},
                         status_code=429,

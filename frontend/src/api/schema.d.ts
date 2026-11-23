@@ -45,7 +45,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Історія прогнозів */
+        /** Історія прогнозів користувача */
         get: operations["list_history_predictions_get"];
         put?: never;
         post?: never;
@@ -62,11 +62,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Один прогноз з історії */
+        /** Один прогноз з історії користувача */
         get: operations["get_history_item_predictions__prediction_id__get"];
         put?: never;
         post?: never;
-        /** Видалити прогноз з історії */
+        /** Видалити прогноз з історії користувача */
         delete: operations["delete_history_item_predictions__prediction_id__delete"];
         options?: never;
         head?: never;
@@ -80,11 +80,88 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Статистика прогнозів */
+        /** Статистика прогнозів користувача */
         get: operations["stats_stats_get"];
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Зареєструватися (й одразу увійти) */
+        post: operations["register_auth_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Увійти */
+        post: operations["login_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Вийти
+         * @description Deletes the session on the server and clears the cookie. Answers 204 with or
+         *     without a session, as many times as asked.
+         */
+        post: operations["logout_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Поточний користувач */
+        get: operations["me_auth_me_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Видалити обліковий запис
+         * @description Deletes the user with every session and every saved prediction. Needs the
+         *     password; wrong passwords count towards the same limit as failed sign-ins.
+         */
+        delete: operations["delete_me_auth_me_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -101,6 +178,29 @@ export interface components {
              * @description Знімок МРТ у форматі JPEG або PNG
              */
             file: string;
+        };
+        /** CredentialsRequest */
+        CredentialsRequest: {
+            /**
+             * Username
+             * @description Ім'я користувача: 3–32 символи, латинські літери, цифри, «_», «.» і «-». Регістр зберігається, але «Alice» і «alice» — одне ім'я
+             */
+            username: string;
+            /**
+             * Password
+             * Format: password
+             * @description Пароль: 10–128 символів, не такий самий, як ім'я користувача
+             */
+            password: string;
+        };
+        /** DeleteAccountRequest */
+        DeleteAccountRequest: {
+            /**
+             * Password
+             * Format: password
+             * @description Поточний пароль, для підтвердження
+             */
+            password: string;
         };
         /** ErrorResponse */
         ErrorResponse: {
@@ -207,7 +307,7 @@ export interface components {
         PredictionResponse: {
             /**
              * Id
-             * @description Ідентифікатор запису в історії; null, якщо історію вимкнено або запис не вдалося зберегти
+             * @description Ідентифікатор запису в історії користувача; null для запиту без сесії (такий прогноз не зберігається), а також якщо історію вимкнено або запис не вдалося зберегти
              */
             id: string | null;
             /**
@@ -286,6 +386,25 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** UserResponse */
+        UserResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Username
+             * @description Ім'я, як його ввели під час реєстрації
+             */
+            username: string;
+            /**
+             * Created At
+             * Format: date-time
+             * @description Час реєстрації в UTC
+             */
+            created_at: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -362,6 +481,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Cookie сесії недійсна або сесія закінчилася (відповідь видаляє cookie): прогноз не зберігся б, тож його не виконано. Без cookie прогноз працює анонімно */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Origin не входить до ALLOWED_ORIGINS; або запит надсилає cookie сесії без заголовка Origin (захист від CSRF); або це запит зі сторінки іншого сайту (Sec-Fetch-Site) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Файл або зображення завелике */
             413: {
                 headers: {
@@ -389,7 +526,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -436,6 +573,24 @@ export interface operations {
                     "application/json": components["schemas"]["PredictionPage"];
                 };
             };
+            /** @description Немає сесії, або cookie сесії недійсна чи сесія закінчилася (тоді відповідь ще й видаляє cookie) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Запит зі сторінки іншого сайту: Sec-Fetch-Site дорівнює cross-site чи same-site, а Origin не входить до ALLOWED_ORIGINS */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -445,7 +600,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -456,7 +611,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Історію вимкнено або база даних недоступна */
+            /** @description Облікові записи й історію вимкнено або база даних недоступна */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -487,7 +642,25 @@ export interface operations {
                     "application/json": components["schemas"]["PredictionRecordResponse"];
                 };
             };
-            /** @description Прогнозу з таким id немає */
+            /** @description Немає сесії, або cookie сесії недійсна чи сесія закінчилася (тоді відповідь ще й видаляє cookie) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Запит зі сторінки іншого сайту: Sec-Fetch-Site дорівнює cross-site чи same-site, а Origin не входить до ALLOWED_ORIGINS */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description У цього користувача немає прогнозу з таким id */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -505,7 +678,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -516,7 +689,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Історію вимкнено або база даних недоступна */
+            /** @description Облікові записи й історію вимкнено або база даних недоступна */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -545,7 +718,25 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Прогнозу з таким id немає */
+            /** @description Немає сесії, або cookie сесії недійсна чи сесія закінчилася (тоді відповідь ще й видаляє cookie) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Origin не входить до ALLOWED_ORIGINS; або запит надсилає cookie сесії без заголовка Origin (захист від CSRF); або це запит зі сторінки іншого сайту (Sec-Fetch-Site) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description У цього користувача немає прогнозу з таким id */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -563,7 +754,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -574,7 +765,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Історію вимкнено або база даних недоступна */
+            /** @description Облікові записи й історію вимкнено або база даних недоступна */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -603,7 +794,25 @@ export interface operations {
                     "application/json": components["schemas"]["StatsResponse"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Немає сесії, або cookie сесії недійсна чи сесія закінчилася (тоді відповідь ще й видаляє cookie) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Запит зі сторінки іншого сайту: Sec-Fetch-Site дорівнює cross-site чи same-site, а Origin не входить до ALLOWED_ORIGINS */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -614,7 +823,314 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Історію вимкнено або база даних недоступна */
+            /** @description Облікові записи й історію вимкнено або база даних недоступна */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    register_auth_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            /** @description Origin не входить до ALLOWED_ORIGINS; або запит надсилає cookie сесії без заголовка Origin (захист від CSRF); або це запит зі сторінки іншого сайту (Sec-Fetch-Site) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Ім'я вже зайняте (без урахування регістру) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Тіло не є JSON-об'єктом із текстовими username і password; для реєстрації ще й ім'я чи пароль не відповідають вимогам (текст пояснює, що саме) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            429: {
+                headers: {
+                    /** @description Ціле число секунд, не менше 1 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Облікові записи й історію вимкнено або база даних недоступна */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    login_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            /** @description Неправильне ім'я або пароль (одна відповідь на обидва випадки) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Origin не входить до ALLOWED_ORIGINS; або запит надсилає cookie сесії без заголовка Origin (захист від CSRF); або це запит зі сторінки іншого сайту (Sec-Fetch-Site) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Тіло не є JSON-об'єктом із текстовими username і password; для реєстрації ще й ім'я чи пароль не відповідають вимогам (текст пояснює, що саме) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            429: {
+                headers: {
+                    /** @description Ціле число секунд, не менше 1 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Облікові записи й історію вимкнено або база даних недоступна */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    logout_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Origin не входить до ALLOWED_ORIGINS; або запит надсилає cookie сесії без заголовка Origin (захист від CSRF); або це запит зі сторінки іншого сайту (Sec-Fetch-Site) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            429: {
+                headers: {
+                    /** @description Ціле число секунд, не менше 1 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    me_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            /** @description Немає сесії, або cookie сесії недійсна чи сесія закінчилася (тоді відповідь ще й видаляє cookie) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Запит зі сторінки іншого сайту: Sec-Fetch-Site дорівнює cross-site чи same-site, а Origin не входить до ALLOWED_ORIGINS */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            429: {
+                headers: {
+                    /** @description Ціле число секунд, не менше 1 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Облікові записи й історію вимкнено або база даних недоступна */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_me_auth_me_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Немає сесії, або cookie сесії недійсна чи сесія закінчилася (тоді відповідь ще й видаляє cookie) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Неправильний пароль; або Origin не входить до ALLOWED_ORIGINS чи його немає (див. інші запити, що змінюють дані) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Тіло не є JSON-об'єктом із текстовим password */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            429: {
+                headers: {
+                    /** @description Ціле число секунд, не менше 1 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Облікові записи й історію вимкнено або база даних недоступна */
             503: {
                 headers: {
                     [name: string]: unknown;

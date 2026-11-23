@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import secrets
 import threading
 import time
 import uuid
@@ -17,7 +18,7 @@ from app.database import Base, Database, create_db_engine
 from app.history import compute_stats, save_prediction
 from app.records import PredictionRecord
 from tests.conftest import MODEL_VERSION
-from tests.helpers import encode_image, image_bytes, make_record
+from tests.helpers import OWNER_ID, encode_image, image_bytes, make_record, new_browser
 
 UNREACHABLE_POSTGRES = "postgresql+psycopg://brain_mri:secret@127.0.0.1:1/brain_mri"
 BASE_TIME = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
@@ -33,7 +34,14 @@ def post_scan(client, data=None, **params):
     return client.post("/predict", files={"file": ("scan.png", data, "image/png")}, params=params)
 
 
-def add_records(database, *records):
+def add_records(database, *records, owner=OWNER_ID):
+    """Store records as the owner's (the user history_client signs in as).
+
+    A record given its own user_id keeps it; owner=None stores records without one.
+    """
+    for record in records:
+        if record.user_id is None:
+            record.user_id = owner
     with database.session() as session:
         session.add_all(records)
         session.commit()
@@ -379,7 +387,7 @@ def test_delete_twice_is_404(history_client, database):
     assert history_client.delete(f"/predictions/{record_id}").status_code == 404
 
 
-def test_parallel_deletes_of_one_record_succeed_only_once(use_database, tmp_path):
+def test_parallel_deletes_of_one_record_succeed_only_once(sign_in, tmp_path):
     """Two DELETE requests for the same id reach the database at the same moment.
 
     A file database gives each request its own connection. Both requests are held just
@@ -388,6 +396,7 @@ def test_parallel_deletes_of_one_record_succeed_only_once(use_database, tmp_path
     """
     database = Database.from_url(f"sqlite:///{(tmp_path / 'history.db').as_posix()}")
     Base.metadata.create_all(database.engine)
+    client = sign_in(database, "owner", OWNER_ID)
     (record_id,) = add_records(database, make_record())
     both_ready = threading.Barrier(2, timeout=5)
 
@@ -396,7 +405,6 @@ def test_parallel_deletes_of_one_record_succeed_only_once(use_database, tmp_path
         if statement.lstrip().upper().startswith("DELETE"):
             both_ready.wait()
 
-    client = use_database(database)
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
             responses = list(
@@ -497,29 +505,32 @@ def test_stats_count_codes_they_do_not_know(history_client, database):
     )
 
 
-def test_stats_add_up_while_predictions_are_being_saved(use_database, tmp_path):
+def test_stats_add_up_while_predictions_are_being_saved(sign_in, tmp_path):
     """A prediction is saved between two statements of /stats. All the numbers in the
     answer must still describe the same moment: the total is the sum over the classes."""
     url = f"sqlite:///{(tmp_path / 'history.db').as_posix()}"
     database, writer = Database.from_url(url), Database.from_url(url)
     Base.metadata.create_all(database.engine)
+    client = sign_in(database, "owner", OWNER_ID)
     add_records(database, *records_at("glioma", "notumor", "pituitary", warnings_from=1))
     statements = []
 
     @event.listens_for(database.engine, "before_cursor_execute")
     def save_a_prediction_meanwhile(conn, cursor, statement, *args):
-        statements.append(statement)
+        # Only the statements of /stats itself: the session check reads other tables.
+        if "FROM predictions" in statement:
+            statements.append(statement)
         if len(statements) == 2:
             add_records(writer, make_record(predicted_class="meningioma", warnings=[]))
+            statements.append("saved")
 
-    client = use_database(database)
     try:
         stats = client.get("/stats").json()
     finally:
         database.dispose()
         writer.dispose()
 
-    assert len(statements) >= 2  # the record really was saved in the middle of /stats
+    assert "saved" in statements  # the record really was saved in the middle of /stats
     assert stats["total"] == sum(stats["by_class"].values())
     assert stats["with_warnings_share"] == pytest.approx(2 / stats["total"])
     assert stats["warnings_by_code"]["unexpected_image_size"] == 2
@@ -541,7 +552,7 @@ def test_stats_read_one_snapshot_on_postgres(monkeypatch):
     monkeypatch.setattr(session, "connection", connection)
 
     with pytest.raises(Stop):
-        compute_stats(session)
+        compute_stats(session, OWNER_ID)
 
     assert requested == [{"isolation_level": "REPEATABLE READ"}]
 
@@ -610,12 +621,16 @@ def test_records_saved_before_not_mri_like_are_shown_as_they_are(history_client,
 
 @pytest.fixture
 def broken_client(use_database):
+    """A browser with a session cookie, while the database is unreachable."""
     database = Database.from_url(UNREACHABLE_POSTGRES)
-    yield use_database(database)
+    browser = new_browser(use_database(database).app)
+    browser.cookies.set("brain_mri_session", secrets.token_urlsafe(32))
+    yield browser
     database.dispose()
 
 
 def test_prediction_still_works_when_database_is_down(broken_client, caplog):
+    """The session cannot be checked, so the prediction is answered but not saved."""
     caplog.set_level(logging.ERROR)
     started = time.perf_counter()
 
@@ -625,7 +640,7 @@ def test_prediction_still_works_when_database_is_down(broken_client, caplog):
     body = response.json()
     assert body["id"] is None
     assert body["predicted_class"] in body["probabilities"]
-    assert "Could not save the prediction to the history database" in caplog.text
+    assert "Session not checked: the history database is unavailable" in caplog.text
     assert time.perf_counter() - started < 10
 
 
@@ -656,11 +671,11 @@ def test_after_a_failure_saving_is_paused(broken_client, caplog):
     assert response.json()["id"] is None
     assert time.perf_counter() - started < 2  # did not wait for the database again
     assert "Prediction not saved: the history database failed less than 30 s ago" in caplog.text
-    assert "Could not save" not in caplog.text
+    assert "Session not checked" not in caplog.text
 
 
-def test_saving_is_retried_after_the_pause(use_database, database):
-    client = use_database(database)
+def test_saving_is_retried_after_the_pause(history_client, database):
+    client = history_client
     database.saving_paused_until = time.monotonic() + 30
 
     assert post_scan(client).json()["id"] is None

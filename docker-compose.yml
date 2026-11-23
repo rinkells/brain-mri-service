@@ -68,6 +68,14 @@ services:
       RATE_LIMIT_PREDICT_PER_MINUTE: ${RATE_LIMIT_PREDICT_PER_MINUTE:-10}
       RATE_LIMIT_WRITE_PER_MINUTE: ${RATE_LIMIT_WRITE_PER_MINUTE:-30}
       RATE_LIMIT_READ_PER_MINUTE: ${RATE_LIMIT_READ_PER_MINUTE:-120}
+      RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-10}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-brain_mri_session}
+      # The interface is served over plain HTTP on localhost: a Secure cookie would never be
+      # sent back. Set it to true behind HTTPS.
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      LOGIN_FAILURES_MAX: ${LOGIN_FAILURES_MAX:-5}
+      LOGIN_FAILURES_WINDOW_MINUTES: ${LOGIN_FAILURES_WINDOW_MINUTES:-15}
       # Only nginx of the frontend service may name the client (X-Real-IP). Not the whole
       # network: direct connections to the published port 8000 come from its gateway,
       # which Docker takes from ip_range below (172.30.250.128).
@@ -82,7 +90,8 @@ services:
     # app (see the Dockerfile).
     command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers"]
     ports:
-      # No authentication yet, so the API is published on localhost only.
+      # On localhost only: there is no HTTPS, so passwords and session cookies would cross
+      # the network in clear text.
       - "127.0.0.1:${API_PORT:-8000}:8000"
 
   frontend:

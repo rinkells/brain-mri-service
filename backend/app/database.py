@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import Engine, MetaData, create_engine, make_url
+from sqlalchemy import Engine, MetaData, create_engine, event, make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -24,21 +24,35 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
+def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+    """SQLite ignores REFERENCES, ON DELETE CASCADE included, unless this is on."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON")
+    cursor.close()
+
+
 def create_db_engine(url: str) -> Engine:
-    """Create an engine for Postgres in production or SQLite in tests."""
+    """Create an engine for Postgres in production or SQLite in tests.
+
+    Errors never show the values bound to a statement (hide_parameters): they end up in
+    the log, and the values include password hashes and session ids.
+    """
     parsed = make_url(url)
 
     if parsed.get_backend_name() == "sqlite":
         # FastAPI runs sync endpoints in worker threads.
-        options: dict = {"connect_args": {"check_same_thread": False}}
+        options: dict = {"connect_args": {"check_same_thread": False}, "hide_parameters": True}
         if parsed.database in (None, "", ":memory:"):
             # One shared connection, otherwise every connection sees its own empty database.
             options["poolclass"] = StaticPool
-        return create_engine(parsed, **options)
+        engine = create_engine(parsed, **options)
+        event.listen(engine, "connect", _enable_foreign_keys)
+        return engine
 
     return create_engine(
         parsed,
         pool_pre_ping=True,
+        hide_parameters=True,
         connect_args={"connect_timeout": POSTGRES_CONNECT_TIMEOUT_S},
     )
 

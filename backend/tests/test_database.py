@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.schema import CreateTable
 
 from app.database import Database, create_db_engine
-from app.records import PredictionRecord
+from app.records import PredictionRecord, User, UserSession
 from tests.helpers import make_record
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -138,7 +138,17 @@ def test_no_column_can_hold_the_image_or_its_name():
         "gradcam_requested",
         "latency_ms",
         "model_version",
+        "user_id",
     }
+
+
+def test_sqlite_enforces_foreign_keys(database):
+    """SQLite ignores REFERENCES unless told otherwise; the cascades below depend on it."""
+    with database.session() as session:
+        session.add(make_record(user_id=uuid.uuid4()))
+
+        with pytest.raises(IntegrityError):
+            session.commit()
 
 
 # --- Migrations ----------------------------------------------------------------
@@ -417,6 +427,7 @@ def test_upgrade_drops_the_file_hash_and_its_index_but_keeps_the_records(tmp_pat
     assert {index["name"] for index in indexes} == {
         "ix_predictions_created_at",
         "ix_predictions_predicted_class",
+        "ix_predictions_user_id_created_at",  # added by 0005
     }
     database = Database.from_url(url)
     with database.session() as session:
@@ -483,3 +494,199 @@ def test_offline_sql_drops_and_restores_the_file_hash_on_postgres(capsys):
     assert (
         "CREATE INDEX ix_predictions_image_sha256 ON predictions (image_sha256)" in downgrade_sql
     )
+
+
+# --- Users and sessions (0005) -------------------------------------------------------
+
+NOW = datetime(2026, 11, 23, 12, 0, tzinfo=UTC)
+
+
+def insert_0004_row(url: str) -> uuid.UUID:
+    """Insert a record with plain SQL, naming only the columns of migration 0004."""
+    record_id = uuid.uuid4()
+    engine = create_db_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO predictions (id, created_at, predicted_class, probabilities, "
+                    "image_width, image_height, warnings, gradcam_requested, latency_ms, "
+                    "model_version) VALUES (:id, '2026-11-01 12:00:00.000000', 'glioma', "
+                    "'{\"glioma\": 1.0}', 512, 512, '[]', 0, 1.5, 'resnet18_v2c')"
+                ),
+                {"id": record_id.hex},
+            )
+    finally:
+        engine.dispose()
+    return record_id
+
+
+def schema_of(url: str) -> dict:
+    engine = create_db_engine(url)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        return {
+            "tables": tables,
+            "columns": {c["name"]: c for c in inspector.get_columns("predictions")},
+            "indexes": {i["name"]: i["column_names"] for i in inspector.get_indexes("predictions")},
+            "foreign_keys": {
+                table: [
+                    (fk["constrained_columns"], fk["referred_table"], fk["options"].get("ondelete"))
+                    for fk in inspector.get_foreign_keys(table)
+                ]
+                for table in ("predictions", "sessions")
+                if table in tables
+            },
+        }
+    finally:
+        engine.dispose()
+
+
+def owners_of_records(url: str) -> dict[str, str | None]:
+    engine = create_db_engine(url)
+    try:
+        with engine.connect() as connection:
+            rows = connection.execute(text("SELECT id, user_id FROM predictions")).all()
+    finally:
+        engine.dispose()
+    return dict(rows)
+
+
+def add_accounts(url: str) -> dict[str, uuid.UUID]:
+    """Alice with two records and a session, Bob with one of each, one ownerless record."""
+    database = Database.from_url(url)
+    alice = User(id=uuid.uuid4(), username="alice", password_hash="$argon2id$alice")
+    bob = User(id=uuid.uuid4(), username="bob", password_hash="$argon2id$bob")
+    with database.session() as session:
+        session.add_all([alice, bob])
+        session.flush()
+        session.add_all(
+            [
+                UserSession(id="a" * 64, user_id=alice.id, created_at=NOW, expires_at=NOW),
+                UserSession(id="b" * 64, user_id=bob.id, created_at=NOW, expires_at=NOW),
+                make_record(user_id=alice.id),
+                make_record(user_id=alice.id),
+                make_record(user_id=bob.id),
+                make_record(),
+            ]
+        )
+        session.commit()
+    database.dispose()
+    return {"alice": alice.id, "bob": bob.id}
+
+
+def test_upgrade_to_0005_keeps_the_records_without_an_owner(tmp_path):
+    url = sqlite_url(tmp_path)
+    config = alembic_config(url)
+    command.upgrade(config, "0004")
+    old_ids = {insert_0004_row(url), insert_0004_row(url)}
+
+    command.upgrade(config, "head")
+
+    assert current_revision(url) == "0005"
+    schema = schema_of(url)
+    assert {"users", "sessions"} <= schema["tables"]
+    assert schema["columns"]["user_id"]["nullable"] is True
+    assert schema["indexes"]["ix_predictions_user_id_created_at"] == ["user_id", "created_at"]
+    assert schema["foreign_keys"] == {
+        "predictions": [(["user_id"], "users", "CASCADE")],
+        "sessions": [(["user_id"], "users", "CASCADE")],
+    }
+    assert owners_of_records(url) == {record_id.hex: None for record_id in old_ids}
+    # SQLite cannot reflect an index on an expression, so test_migrations_match_the_models
+    # skips this one: its definition is read directly.
+    engine = create_db_engine(url)
+    with engine.connect() as connection:
+        index_sql = connection.scalar(
+            text("SELECT sql FROM sqlite_master WHERE name = 'uq_users_username_lower'")
+        )
+    engine.dispose()
+    assert index_sql == "CREATE UNIQUE INDEX uq_users_username_lower ON users (lower(username))"
+
+
+def test_the_migrated_database_deletes_a_users_sessions_and_records_with_the_user(
+    migrated_url,
+):
+    ids = add_accounts(migrated_url)
+    engine = create_db_engine(migrated_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM users WHERE id = :id"), {"id": ids["alice"].hex})
+        with engine.connect() as connection:
+            sessions = connection.execute(text("SELECT user_id FROM sessions")).scalars().all()
+    finally:
+        engine.dispose()
+
+    assert sessions == [ids["bob"].hex]
+    assert sorted(owners_of_records(migrated_url).values(), key=str) == sorted(
+        [ids["bob"].hex, None], key=str
+    )
+
+
+def test_the_migrated_database_refuses_a_name_that_differs_only_in_case(migrated_url):
+    database = Database.from_url(migrated_url)
+    try:
+        with database.session() as session:
+            session.add(User(id=uuid.uuid4(), username="Alice", password_hash="$argon2id$1"))
+            session.commit()
+            session.add(User(id=uuid.uuid4(), username="aLICE", password_hash="$argon2id$2"))
+
+            with pytest.raises(IntegrityError):
+                session.commit()
+    finally:
+        database.dispose()
+
+
+def test_downgrade_from_0005_keeps_the_records_and_drops_the_accounts(migrated_url):
+    add_accounts(migrated_url)
+    config = alembic_config(migrated_url)
+
+    command.downgrade(config, "0004")
+
+    schema = schema_of(migrated_url)
+    assert current_revision(migrated_url) == "0004"
+    assert not {"users", "sessions"} & schema["tables"]
+    assert "user_id" not in schema["columns"]
+    assert set(schema["indexes"]) == {"ix_predictions_created_at", "ix_predictions_predicted_class"}
+    assert schema["foreign_keys"] == {"predictions": []}
+    engine = create_db_engine(migrated_url)
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM predictions")) == 4
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    assert set(owners_of_records(migrated_url).values()) == {None}
+
+
+def test_downgrade_from_0005_reports_how_many_records_lose_their_owner(migrated_url, caplog):
+    add_accounts(migrated_url)
+
+    command.downgrade(alembic_config(migrated_url), "0004")
+
+    assert "3 records lose their owner" in caplog.text
+
+
+def test_offline_sql_creates_and_drops_the_accounts_on_postgres(capsys):
+    url = "postgresql+psycopg://user:secret@localhost:5432/brain_mri"
+
+    command.upgrade(alembic_config(url), "0004:0005", sql=True)
+    upgrade_sql = capsys.readouterr().out
+    command.downgrade(alembic_config(url), "0005:0004", sql=True)
+    downgrade_sql = capsys.readouterr().out
+
+    assert "CREATE TABLE users" in upgrade_sql
+    assert "username VARCHAR(32) NOT NULL" in upgrade_sql
+    assert "CREATE UNIQUE INDEX uq_users_username_lower ON users (lower(username))" in upgrade_sql
+    assert "CREATE TABLE sessions" in upgrade_sql
+    assert "id VARCHAR(64) NOT NULL" in upgrade_sql
+    assert "REFERENCES users (id) ON DELETE CASCADE" in upgrade_sql
+    assert "ALTER TABLE predictions ADD COLUMN user_id UUID" in upgrade_sql
+    assert (
+        "CREATE INDEX ix_predictions_user_id_created_at ON predictions (user_id, created_at)"
+        in upgrade_sql
+    )
+    assert "ALTER TABLE predictions DROP COLUMN user_id" in downgrade_sql
+    assert "DROP TABLE sessions" in downgrade_sql
+    assert "DROP TABLE users" in downgrade_sql

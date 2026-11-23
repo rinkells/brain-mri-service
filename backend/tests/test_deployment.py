@@ -197,8 +197,10 @@ def test_nginx_proxies_the_api_paths_of_the_ui_and_nothing_else():
     ui_paths = set(VITE_PROXY_KEY.findall(vite))
     proxied = {path for path, body in NGINX_LOCATION.findall(nginx_conf()) if "proxy_pass" in body}
 
-    assert ui_paths == {"/health", "/predict", "/predictions", "/stats"}
-    assert proxied == ui_paths | {"/predictions/"}
+    assert ui_paths == {"/health", "/predict", "/predictions", "/stats", "/auth"}
+    # Vite matches keys as prefixes; nginx needs /predictions/ besides /predictions, and
+    # takes everything under /auth/ (the API has no /auth path of its own).
+    assert proxied == (ui_paths - {"/auth"}) | {"/predictions/", "/auth/"}
     for path in ("/docs", "/redoc", "/openapi.json"):
         assert path not in nginx_conf()
 
@@ -356,6 +358,7 @@ def test_rate_limits_reach_the_api_with_the_python_defaults(services):
         "RATE_LIMIT_PREDICT_PER_MINUTE",
         "RATE_LIMIT_WRITE_PER_MINUTE",
         "RATE_LIMIT_READ_PER_MINUTE",
+        "RATE_LIMIT_AUTH_PER_MINUTE",
     }
     assert {name: environment[name].lower() for name in RATE_LIMIT_DEFAULTS} == RATE_LIMIT_DEFAULTS
 
@@ -373,6 +376,58 @@ def test_example_env_files_hold_the_default_rate_limits(path):
     values = dict(line.split("=", 1) for line in lines if line.startswith("RATE_LIMIT_"))
 
     assert {name: value.lower() for name, value in values.items()} == RATE_LIMIT_DEFAULTS
+
+
+# --- Accounts and sessions -----------------------------------------------------------
+
+AUTH_DEFAULTS = {
+    name.upper(): str(field.default).lower()
+    for name, field in Settings.model_fields.items()
+    if name.startswith(("session_", "login_failures_"))
+}
+AUTH_SETTING = re.compile(r"^(?:SESSION|LOGIN_FAILURES)_[A-Z_]+$")
+
+
+def test_auth_settings_reach_the_api_with_the_python_defaults(services):
+    environment = services["api"]["environment"]
+
+    assert set(AUTH_DEFAULTS) == {
+        "SESSION_TTL_HOURS",
+        "SESSION_COOKIE_NAME",
+        "SESSION_COOKIE_SECURE",
+        "LOGIN_FAILURES_MAX",
+        "LOGIN_FAILURES_WINDOW_MINUTES",
+    }
+    assert {name: environment[name].lower() for name in AUTH_DEFAULTS} == AUTH_DEFAULTS
+
+
+def test_compose_falls_back_to_the_default_auth_settings():
+    text = (REPO_DIR / "docker-compose.yml").read_text(encoding="utf-8")
+    fallbacks = dict(re.findall(r"\$\{((?:SESSION|LOGIN_FAILURES)_[A-Z_]+):-([^}]*)\}", text))
+
+    assert {name: value.lower() for name, value in fallbacks.items()} == AUTH_DEFAULTS
+
+
+@pytest.mark.parametrize("path", [".env.example", "backend/.env.example"])
+def test_example_env_files_hold_the_default_auth_settings(path):
+    lines = (REPO_DIR / path).read_text(encoding="utf-8").splitlines()
+    values = dict(line.split("=", 1) for line in lines if AUTH_SETTING.match(line.split("=")[0]))
+
+    assert {name: value.lower() for name, value in values.items()} == AUTH_DEFAULTS
+
+
+def test_nginx_passes_the_session_cookie_both_ways():
+    """Set-Cookie from the API and Cookie from the browser must pass nginx unchanged."""
+    conf = nginx_conf()
+
+    for directive in (
+        "proxy_hide_header Set-Cookie",
+        "proxy_ignore_headers Set-Cookie",
+        "proxy_cookie_",
+        "proxy_set_header Cookie",
+        "proxy_cache ",
+    ):
+        assert directive not in conf
 
 
 def test_uvicorn_leaves_proxy_headers_to_the_app(services):

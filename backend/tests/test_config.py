@@ -1,3 +1,4 @@
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,13 @@ ENV_VARS = (
     "RATE_LIMIT_PREDICT_PER_MINUTE",
     "RATE_LIMIT_WRITE_PER_MINUTE",
     "RATE_LIMIT_READ_PER_MINUTE",
+    "RATE_LIMIT_AUTH_PER_MINUTE",
     "TRUSTED_PROXIES",
+    "SESSION_TTL_HOURS",
+    "SESSION_COOKIE_NAME",
+    "SESSION_COOKIE_SECURE",
+    "LOGIN_FAILURES_MAX",
+    "LOGIN_FAILURES_WINDOW_MINUTES",
 )
 
 
@@ -351,6 +358,63 @@ def test_an_ipv4_mapped_trusted_proxy_is_stored_as_ipv4(monkeypatch):
     ],
 )
 def test_invalid_rate_limit_settings_are_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError):
+        load_settings()
+
+
+# --- Accounts and sessions ---------------------------------------------------------
+
+
+def test_auth_defaults():
+    settings = load_settings()
+
+    assert settings.session_ttl_hours == 168
+    assert settings.session_ttl == timedelta(hours=168)
+    assert settings.session_cookie_name == "brain_mri_session"
+    # Plain HTTP on localhost: a Secure cookie would never be sent back.
+    assert settings.session_cookie_secure is False
+    assert settings.rate_limit_auth_per_minute == 10
+    assert (settings.login_failures_max, settings.login_failures_window_minutes) == (5, 15)
+
+
+def test_auth_settings_are_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("SESSION_TTL_HOURS", "12")
+    monkeypatch.setenv("SESSION_COOKIE_NAME", "__Host-mri")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("RATE_LIMIT_AUTH_PER_MINUTE", "4")
+    monkeypatch.setenv("LOGIN_FAILURES_MAX", "3")
+    monkeypatch.setenv("LOGIN_FAILURES_WINDOW_MINUTES", "30")
+
+    settings = load_settings()
+
+    assert settings.session_ttl == timedelta(hours=12)
+    assert settings.session_cookie_name == "__Host-mri"
+    assert settings.session_cookie_secure is True
+    assert settings.rate_limit_auth_per_minute == 4
+    assert (settings.login_failures_max, settings.login_failures_window_minutes) == (3, 30)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("SESSION_TTL_HOURS", "0"),
+        ("SESSION_TTL_HOURS", "-1"),
+        ("SESSION_COOKIE_NAME", ""),
+        ("SESSION_COOKIE_NAME", "bad name"),
+        ("SESSION_COOKIE_NAME", "a;b"),
+        ("SESSION_COOKIE_NAME", "a=b"),
+        # Browsers drop a __Host- or __Secure- cookie that is not Secure.
+        ("SESSION_COOKIE_NAME", "__Host-mri"),
+        ("SESSION_COOKIE_NAME", "__Secure-mri"),
+        ("SESSION_COOKIE_SECURE", "sometimes"),
+        ("RATE_LIMIT_AUTH_PER_MINUTE", "0"),
+        ("LOGIN_FAILURES_MAX", "0"),
+        ("LOGIN_FAILURES_WINDOW_MINUTES", "0"),
+    ],
+)
+def test_invalid_auth_settings_are_rejected(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
 
     with pytest.raises(ValidationError):

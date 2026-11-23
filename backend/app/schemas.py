@@ -1,10 +1,10 @@
-"""Response schemas of the API."""
+"""Request and response schemas of the API."""
 
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from app.config import ClassName
 
@@ -34,7 +34,8 @@ class PredictionWarning(BaseModel):
 class PredictionResponse(BaseModel):
     id: UUID | None = Field(
         description=(
-            "Ідентифікатор запису в історії; null, якщо історію вимкнено або запис не вдалося "
+            "Ідентифікатор запису в історії користувача; null для запиту без сесії (такий "
+            "прогноз не зберігається), а також якщо історію вимкнено або запис не вдалося "
             "зберегти"
         )
     )
@@ -94,3 +95,28 @@ class StatsResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+# Passwords are SecretStr: a repr, a log line or an error message shows "**********".
+
+
+class CredentialsRequest(BaseModel):
+    username: str = Field(
+        description=(
+            "Ім'я користувача: 3–32 символи, латинські літери, цифри, «_», «.» і «-». "
+            "Регістр зберігається, але «Alice» і «alice» — одне ім'я"
+        )
+    )
+    password: SecretStr = Field(
+        description="Пароль: 10–128 символів, не такий самий, як ім'я користувача"
+    )
+
+
+class DeleteAccountRequest(BaseModel):
+    password: SecretStr = Field(description="Поточний пароль, для підтвердження")
+
+
+class UserResponse(BaseModel):
+    id: UUID
+    username: str = Field(description="Ім'я, як його ввели під час реєстрації")
+    created_at: datetime = Field(description="Час реєстрації в UTC")
