@@ -526,7 +526,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -600,7 +600,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -678,7 +678,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -754,7 +754,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -812,7 +812,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -892,7 +892,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_AUTH_PER_MINUTE); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -972,7 +972,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_AUTH_PER_MINUTE) або забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_MAX за LOGIN_FAILURES_WINDOW_MINUTES); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -1019,7 +1019,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_WRITE_PER_MINUTE); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -1068,7 +1068,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_READ_PER_MINUTE); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
@@ -1146,7 +1146,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_*), а для входу й видалення облікового запису ще й забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_*); заголовок Retry-After каже, через скільки секунд повторити */
+            /** @description Забагато запитів з цієї адреси за останню хвилину (RATE_LIMIT_WRITE_PER_MINUTE) або забагато неправильних паролів для цього імені з цієї адреси (LOGIN_FAILURES_MAX за LOGIN_FAILURES_WINDOW_MINUTES); заголовок Retry-After каже, через скільки секунд повторити */
             429: {
                 headers: {
                     /** @description Ціле число секунд, не менше 1 */
