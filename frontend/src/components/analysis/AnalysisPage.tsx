@@ -13,7 +13,8 @@ import { UploadZone } from '../upload/UploadZone'
 type RequestState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'success'; result: PredictionResponse; scanUrl: string }
+  // signedIn: when the request was sent; the note under the result is about that moment.
+  | { status: 'success'; result: PredictionResponse; scanUrl: string; signedIn: boolean }
   | { status: 'error'; error: unknown }
 
 /** Upload a scan, send it to POST /predict and show the result. */
@@ -60,10 +61,11 @@ export function AnalysisPage() {
     const controller = new AbortController()
     controllerRef.current = controller
     setRequest({ status: 'loading' })
+    const signedIn = auth.status === 'signed-in'
 
     try {
       const result = await predict(selection.file, { gradcam, signal: controller.signal })
-      setRequest({ status: 'success', result, scanUrl: selection.previewUrl })
+      setRequest({ status: 'success', result, scanUrl: selection.previewUrl, signedIn })
     } catch (error) {
       if (!controller.signal.aborted) {
         setRequest({ status: 'error', error })
@@ -99,7 +101,8 @@ export function AnalysisPage() {
           <ResultPanel
             result={request.result}
             scanUrl={request.scanUrl}
-            signedIn={auth.status === 'signed-in'}
+            signedInAtRequest={request.signedIn}
+            signedInNow={auth.status === 'signed-in'}
           />
         ) : (
           <div className="flex h-full min-h-64 items-center justify-center text-center text-slate-500 dark:text-slate-400">

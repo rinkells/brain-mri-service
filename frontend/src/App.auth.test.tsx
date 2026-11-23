@@ -698,3 +698,25 @@ describe('without a database (DATABASE_URL not set)', () => {
     }
   })
 })
+
+describe('the note under a result tells why it was not saved', () => {
+  test('a guest analyses, then signs in: no false reason appears', async () => {
+    mockApi({ predict: () => jsonResponse(makePrediction({ id: null })), login: signedIn() })
+    const user = userEvent.setup()
+    render(<App />)
+    await analyze(user)
+    await screen.findByRole('link', { name: 'Увійдіть' })
+
+    await user.click(within(banner()).getByRole('link', { name: 'Увійти' }))
+    await user.type(await screen.findByLabelText('Ім’я користувача'), 'alice')
+    await user.type(field('Пароль'), PASSWORD)
+    await user.click(within(form('Вхід')).getByRole('button', { name: 'Увійти' }))
+    await within(banner()).findByRole('button', { name: /alice/ })
+
+    expect(window.location.hash).toBe('#/')
+    expect(screen.getByTestId('predicted-class')).toHaveTextContent('Менінгіома')
+    expect(screen.getByText('Результат не збережено: аналіз виконано без входу.')).toBeVisible()
+    expect(screen.queryByText(/історію вимкнено/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Увійдіть' })).not.toBeInTheDocument()
+  })
+})

@@ -13,16 +13,28 @@ import { WarningList } from './WarningList'
 interface ResultPanelProps {
   result: PredictionResponse
   scanUrl: string
-  /** Whether a user is signed in: only then is a result saved. */
-  signedIn?: boolean
+  /** Whether a user was signed in when the scan was sent: only then is it saved. */
+  signedInAtRequest?: boolean
+  /** Whether a user is signed in now: a guest is offered to sign in. */
+  signedInNow?: boolean
 }
 
-function SavedNote({ saved, signedIn }: { saved: boolean; signedIn: boolean }) {
+interface SavedNoteProps {
+  saved: boolean
+  signedInAtRequest: boolean
+  signedInNow: boolean
+}
+
+function SavedNote({ saved, signedInAtRequest, signedInNow }: SavedNoteProps) {
   if (saved) {
     return <>Результат збережено в історії (без самого знімка).</>
   }
-  if (signedIn) {
+  if (signedInAtRequest) {
     return <>Результат не збережено в історії: історію вимкнено або база даних недоступна.</>
+  }
+  if (signedInNow) {
+    // Sent as a guest, and the user signed in since: the reason is that, nothing else.
+    return <>Результат не збережено: аналіз виконано без входу.</>
   }
   return (
     <>
@@ -38,7 +50,12 @@ function SavedNote({ saved, signedIn }: { saved: boolean; signedIn: boolean }) {
   )
 }
 
-export function ResultPanel({ result, scanUrl, signedIn = false }: ResultPanelProps) {
+export function ResultPanel({
+  result,
+  scanUrl,
+  signedInAtRequest = false,
+  signedInNow = false,
+}: ResultPanelProps) {
   const predicted = result.predicted_class
   const confidence = result.probabilities[predicted] ?? 0
   // Known codes have their own presentation; other codes go to the list.
@@ -65,7 +82,11 @@ export function ResultPanel({ result, scanUrl, signedIn = false }: ResultPanelPr
           {result.image_size.height}
         </p>
         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          <SavedNote saved={Boolean(result.id)} signedIn={signedIn} />
+          <SavedNote
+            saved={Boolean(result.id)}
+            signedInAtRequest={signedInAtRequest}
+            signedInNow={signedInNow}
+          />
         </p>
         {warnings.imageSize && <ImageSizeNote message={warnings.imageSize.message} />}
       </div>
