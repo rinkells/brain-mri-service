@@ -407,6 +407,7 @@ npm run dev
 | `SESSION_COOKIE_NAME` | `brain_mri_session` | Назва cookie сесії: латинські літери, цифри, `_`, `.`, `-`. Назва з префіксом `__Host-` чи `__Secure-` потребує `SESSION_COOKIE_SECURE=true`, інакше сервіс не стартує: браузер таку cookie без `Secure` відкидає |
 | `SESSION_COOKIE_SECURE` | `false` | Чи надсилати cookie лише через HTTPS (`Secure`). Типово вимкнено, бо сервіс працює по HTTP на `localhost`, і cookie з `Secure` браузер назад не надіслав би. За HTTPS увімкніть |
 | `LOGIN_FAILURES_MAX` | `5` | Скільки неправильних паролів для одного імені з однієї адреси допускається за `LOGIN_FAILURES_WINDOW_MINUTES`; далі вхід відповідає 429 із `Retry-After`. Діє й тоді, коли `RATE_LIMIT_ENABLED=false` |
+| `SESSION_MAX_PER_USER` | `10` | Скільки сесій (браузерів, пристроїв) може мати один користувач одночасно. Вхід чи реєстрація понад цю кількість видаляє найстаріші сесії цього користувача |
 | `LOGIN_FAILURES_WINDOW_MINUTES` | `15` | Вікно для `LOGIN_FAILURES_MAX`, хвилин (ковзне) |
 | `TRUSTED_PROXIES` | не задано | Адреси зворотних проксі через кому (лише окремі IP, не мережі), чиєму заголовку `X-Real-IP` API вірить, визначаючи клієнта. Порожнє значення: заголовок ігнорується, клієнт — це адреса з'єднання. У Docker Compose — адреса контейнера `frontend` |
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1,api` | Значення заголовка `Host` (без порту), на які відповідає API, через кому. На інші — 400. `*` дозволяє будь-який хост. `api` — назва сервісу в Docker Compose. `localhost` і `127.0.0.1` дозволені завжди, навіть якщо їх тут немає: на них звертається healthcheck контейнера. Захисту від DNS rebinding це не послаблює: така атака приходить з іменем хоста зловмисника в заголовку `Host` |
@@ -426,7 +427,7 @@ Compose читає кореневий файл `.env` (шаблон — `.env.ex
 | `POSTGRES_DB` | `brain_mri` | Назва бази |
 | `POSTGRES_PORT` | `5433` | Порт Postgres на `127.0.0.1` (5433, щоб не конфліктувати з локальним Postgres на 5432) |
 | `API_PORT` | `8000` | Порт API на `127.0.0.1` |
-| `DEVICE`, `MAX_UPLOAD_MB`, `MAX_PIXELS`, `MAX_IMAGE_SIDE`, `MAX_CONCURRENT_INFERENCES`, `MAX_QUEUE`, `LOW_CONFIDENCE_THRESHOLD`, `NOT_MRI_COLOR_MAX`, `NOT_MRI_NOISE_MAX`, `NOT_MRI_STD_MIN`, `NOT_MRI_LOWCONTRAST_STD`, `NOT_MRI_DARK_MIN`, `NOT_MRI_OPAQUE_MIN`, `ALLOWED_HOSTS`, `ENABLE_DOCS`, `RATE_LIMIT_ENABLED`, `RATE_LIMIT_PREDICT_PER_MINUTE`, `RATE_LIMIT_WRITE_PER_MINUTE`, `RATE_LIMIT_READ_PER_MINUTE`, `RATE_LIMIT_AUTH_PER_MINUTE`, `SESSION_TTL_HOURS`, `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE`, `LOGIN_FAILURES_MAX`, `LOGIN_FAILURES_WINDOW_MINUTES` | як у бекенді | Передаються бекенду; `MAX_UPLOAD_MB` отримує ще й збірка інтерфейсу як `VITE_MAX_UPLOAD_MB`. `TRUSTED_PROXIES` Compose задає сам (адреса `frontend`) |
+| `DEVICE`, `MAX_UPLOAD_MB`, `MAX_PIXELS`, `MAX_IMAGE_SIDE`, `MAX_CONCURRENT_INFERENCES`, `MAX_QUEUE`, `LOW_CONFIDENCE_THRESHOLD`, `NOT_MRI_COLOR_MAX`, `NOT_MRI_NOISE_MAX`, `NOT_MRI_STD_MIN`, `NOT_MRI_LOWCONTRAST_STD`, `NOT_MRI_DARK_MIN`, `NOT_MRI_OPAQUE_MIN`, `ALLOWED_HOSTS`, `ENABLE_DOCS`, `RATE_LIMIT_ENABLED`, `RATE_LIMIT_PREDICT_PER_MINUTE`, `RATE_LIMIT_WRITE_PER_MINUTE`, `RATE_LIMIT_READ_PER_MINUTE`, `RATE_LIMIT_AUTH_PER_MINUTE`, `SESSION_TTL_HOURS`, `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE`, `SESSION_MAX_PER_USER`, `LOGIN_FAILURES_MAX`, `LOGIN_FAILURES_WINDOW_MINUTES` | як у бекенді | Передаються бекенду; `MAX_UPLOAD_MB` отримує ще й збірка інтерфейсу як `VITE_MAX_UPLOAD_MB`. `TRUSTED_PROXIES` Compose задає сам (адреса `frontend`) |
 | `ALLOWED_ORIGINS` | як у бекенді, але порт API береться з `API_PORT`, і додано `http://localhost:8080`, `http://127.0.0.1:8080` | Передається бекенду; якщо змінили `API_PORT`, Swagger UI однаково працює. Адреси з портом 8080 — сторінки інтерфейсу з `frontend` |
 
 `MODEL_PATH` і `MODEL_VERSION` для сервісу `api` задано в `docker-compose.yml`.
@@ -523,7 +524,9 @@ PostgreSQL рядки фізично лишаються у файлах табл
 створюють нову сесію з новим токеном; токен, який браузер приніс із собою, ніколи не
 приймається як новий (захист від session fixation), а сесію, яку він називав, вхід видаляє.
 Під час кожного входу видаляються й усі прострочені сесії. Сесія діє `SESSION_TTL_HOURS`
-від входу і не подовжується.
+від входу і не подовжується. Одночасно в користувача може бути не більше
+`SESSION_MAX_PER_USER` (10) сесій: новий вхід понад цю кількість видаляє найстаріші, тож
+браузер, у якому входили найдавніше, отримає 401 і має увійти знову.
 
 ```
 Set-Cookie: brain_mri_session=<токен>; HttpOnly; Max-Age=604800; Path=/; SameSite=Lax
@@ -567,7 +570,14 @@ Set-Cookie: brain_mri_session=<токен>; HttpOnly; Max-Age=604800; Path=/; Sa
   існують. Успішний вхід обнуляє лічильник. Неправильний пароль у `DELETE /auth/me` теж
   рахується. Інше ім'я з тієї самої адреси чи те саме ім'я з іншої адреси не блокуються.
   Лічильник — у пам'яті процесу, як і решта лімітів (див. «Rate limiting»), і діє незалежно
-  від `RATE_LIMIT_ENABLED`.
+  від `RATE_LIMIT_ENABLED`. Пам'ять він займає так само обмежену: не більше 10 000 пар «ім'я,
+  адреса»; коли їх більше, за O(1) забувається пара, що найдовше не мала невдач. Тому
+  зловмисник, який перебирає 10 000 різних імен, може «стерти» лічильник для чужого імені,
+  але з однієї адреси ліміт `/auth/*` дозволяє на це щонайменше 1000 хвилин.
+- Тіло запиту до `/auth/*` — не більше 8 КіБ (ім'я й пароль уміщаються з великим запасом).
+  Більше тіло отримує 413 у звичайному форматі помилки (`{"detail": "Тіло запиту до /auth/*
+  завелике: дозволено не більше 8 КіБ."}`) ще до того, як його дочитано до кінця, а тим
+  паче розібрано як JSON; для тіла без `Content-Length` байти рахуються під час читання.
 - Під Docker Desktop усі клієнти цього комп'ютера приходять з однієї адреси (шлюз мережі
   Docker, див. «Rate limiting»). Тому п'ять неправильних паролів для імені з будь-якої
   програми на ньому блокують вхід під цим ім'ям для всіх локальних клієнтів на 15 хвилин, а
@@ -1080,7 +1090,7 @@ curl.exe -b jar.txt "http://localhost:8080/predictions?limit=10&offset=0&predict
 | 403 | `POST` або `DELETE` із заголовком `Origin`, якого немає в `ALLOWED_ORIGINS` (запит зі сторінки іншого сайту); `POST` або `DELETE` із cookie сесії, але без `Origin` (CSRF); будь-який запит, крім `/health`, із `Sec-Fetch-Site: cross-site` чи `same-site` без дозволеного `Origin` (див. «Rate limiting»); неправильний пароль у `DELETE /auth/me` |
 | 404 | У цього користувача немає запису з таким `id` (чужий запис теж дає 404) |
 | 409 | `POST /auth/register`: ім'я вже зайняте (без урахування регістру) |
-| 413 | Файл більший за `MAX_UPLOAD_MB`, знімок має більше пікселів, ніж `MAX_PIXELS`, або його довша сторона більша за `MAX_IMAGE_SIDE` |
+| 413 | Файл більший за `MAX_UPLOAD_MB`, знімок має більше пікселів, ніж `MAX_PIXELS`, або його довша сторона більша за `MAX_IMAGE_SIDE`; тіло запиту до `/auth/*` більше за 8 КіБ |
 | 415 | Зображення не у форматі JPEG чи PNG (наприклад, GIF, BMP, TIFF, WEBP), 16-бітне (зокрема 16-бітний PNG у відтінках сірого) або має кілька кадрів (анімований PNG) |
 | 422 | Некоректний запит: немає поля `file`, неправильний `gradcam`, `limit`, `offset`, клас або `id`; тіло `/auth/*` не є JSON-об'єктом із потрібними текстовими полями; ім'я чи пароль під час реєстрації не відповідають вимогам; також якщо значення із запиту не прийняла сама база даних |
 | 429 | Забагато запитів від цього клієнта за останні 60 секунд (див. «Rate limiting») або забагато неправильних паролів для цього імені з цієї адреси (див. «Автентифікація»); відповідь має заголовок `Retry-After` (ціле число секунд) |
