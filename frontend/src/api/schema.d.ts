@@ -33,7 +33,7 @@ export interface paths {
         };
         /**
          * Готовність до роботи (readiness)
-         * @description Readiness: сервіс готовий до повної роботи — модель завантажена, а база відповіла на SELECT 1 не довше ніж за 2 с (без DATABASE_URL база вважається недоступною). Тоді 200 і status=ready, інакше 503 і status=not_ready; поля model і database кажуть, що саме не готове, без тексту помилки. Цим шляхом перевіряє стан сервісу api Docker Compose. Не обмежується лімітом, не потребує сесії, не відхиляється перевіркою запитів зі сторінок інших сайтів і не кешується (Cache-Control: no-store).
+         * @description Readiness: сервіс готовий до повної роботи — модель завантажена, а база відповіла на SELECT 1 не довше ніж за 2 с. Без DATABASE_URL база не використовується й не перевіряється: database=null, і готовність залежить лише від моделі. Тоді 200 і status=ready, інакше 503 і status=not_ready; поля model і database кажуть, що саме не готове, без тексту помилки. Цим шляхом перевіряє стан сервісу api Docker Compose. Не обмежується лімітом, не потребує сесії, не відхиляється перевіркою запитів зі сторінок інших сайтів і не кешується (Cache-Control: no-store).
          */
         get: operations["ready_health_ready_get"];
         put?: never;
@@ -389,7 +389,7 @@ export interface components {
         ReadinessResponse: {
             /**
              * Status
-             * @description ready, коли модель завантажена й база відповідає; інакше not_ready
+             * @description ready, коли модель завантажена, а база (якщо вона використовується) відповідає; інакше not_ready
              * @enum {string}
              */
             status: "ready" | "not_ready";
@@ -400,9 +400,9 @@ export interface components {
             model: boolean;
             /**
              * Database
-             * @description База відповіла на SELECT 1 за 2 с; false також тоді, коли DATABASE_URL не задано
+             * @description true — база відповіла на SELECT 1 за 2 с; false — DATABASE_URL задано, але база не відповіла; null — база не використовується (DATABASE_URL не задано), тож від неї готовність не залежить
              */
-            database: boolean;
+            database: boolean | null;
         };
         /** StatsResponse */
         StatsResponse: {
@@ -506,7 +506,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Модель завантажена, база відповідає */
+            /** @description Модель завантажена, а база відповідає (або не використовується: database=null) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -515,7 +515,7 @@ export interface operations {
                     "application/json": components["schemas"]["ReadinessResponse"];
                 };
             };
-            /** @description Модель не завантажена або база не відповіла за 2 с */
+            /** @description Модель не завантажена або задана база не відповіла за 2 с */
             503: {
                 headers: {
                     [name: string]: unknown;
