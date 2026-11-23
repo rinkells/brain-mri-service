@@ -15,11 +15,18 @@ const KIND_BY_STATUS: Partial<Record<number, ApiErrorKind>> = {
   413: 'too-large',
   415: 'unsupported-format',
   422: 'validation',
+  429: 'rate-limited',
   // Outside /predict, our backend answers 503 only for the history database.
   503: 'database-unavailable',
   // The Vite dev proxy answers 502 when the backend is not running.
   502: 'unavailable',
   504: 'unavailable',
+}
+
+/** Whole seconds from a Retry-After header; undefined when it is missing or not that. */
+function readRetryAfter(response: Response): number | undefined {
+  const value = response.headers.get('Retry-After')
+  return value !== null && /^\d+$/.test(value.trim()) ? Number(value) : undefined
 }
 
 // Starlette's TrustedHostMiddleware answers a Host outside ALLOWED_HOSTS with this
@@ -65,7 +72,8 @@ async function send(
     const { text, detail } = await readBody(response)
     const refusedHost = response.status === 400 && text.trim() === HOST_REFUSAL
     const kind = refusedHost ? 'host-not-allowed' : (kindByStatus[response.status] ?? 'server')
-    throw new ApiError(kind, { status: response.status, detail })
+    const retryAfter = response.status === 429 ? readRetryAfter(response) : undefined
+    throw new ApiError(kind, { status: response.status, detail, retryAfter })
   }
   return response
 }

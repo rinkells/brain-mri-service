@@ -147,6 +147,26 @@ def test_requests_beyond_the_queue_get_503_with_retry_after(slow_service):
     assert queued.result(timeout=WAIT_S).status_code == 200
 
 
+def test_with_rate_limiting_on_a_full_queue_still_answers_503(slow_service):
+    """The rate limit sits in front of the queue but does not replace its refusal."""
+    client, model, pool = slow_service(
+        max_concurrent_inferences=1, max_queue=1, rate_limit_enabled=True
+    )
+    running = pool.submit(post_scan, client)
+    wait_until(lambda: model.started == 1)
+    queued = pool.submit(post_scan, client)
+    wait_until(lambda: client.app.state.inference_limiter.in_flight == 2)
+
+    rejected = pool.submit(post_scan, client).result(timeout=WAIT_S)
+
+    assert rejected.status_code == 503
+    assert rejected.headers["Retry-After"] == "5"
+    assert rejected.json() == {"detail": BUSY_DETAIL}
+    model.release.set()
+    assert running.result(timeout=WAIT_S).status_code == 200
+    assert queued.result(timeout=WAIT_S).status_code == 200
+
+
 def test_queue_frees_up_after_the_rush(slow_service):
     client, model, pool = slow_service(max_concurrent_inferences=1, max_queue=0)
     first = pool.submit(post_scan, client)

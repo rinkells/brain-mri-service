@@ -242,6 +242,60 @@ describe('refusals of the Host and Origin checks', () => {
   })
 })
 
+describe('too many requests (429)', () => {
+  const tooMany = (retryAfter: string | null) =>
+    jsonResponse({ detail: `Забагато запитів. Спробуйте ще раз через ${retryAfter} с.` }, 429)
+
+  function withRetryAfter(retryAfter: string | null) {
+    return () => {
+      const response = tooMany(retryAfter)
+      if (retryAfter !== null) {
+        response.headers.set('Retry-After', retryAfter)
+      }
+      return response
+    }
+  }
+
+  test.each([
+    ['predict', () => predict(makeFile(), { gradcam: false })],
+    ['the history', () => listPredictions({ limit: 10, offset: 0 })],
+    ['a delete', () => deletePrediction('6f1c2a3e-0000-4000-8000-000000000001')],
+  ])('from %s is rate-limited, with the seconds to wait', async (_, request) => {
+    stubFetch(withRetryAfter('37'))
+
+    const error = await captureError(request())
+
+    expect(error.kind).toBe('rate-limited')
+    expect(error.status).toBe(429)
+    expect(error.retryAfter).toBe(37)
+  })
+
+  test.each([null, 'soon', '-3', '1.5'])('ignores a Retry-After of %s', async (value) => {
+    stubFetch(withRetryAfter(value))
+
+    const error = await captureError(predict(makeFile(), { gradcam: false }))
+
+    expect(error.kind).toBe('rate-limited')
+    expect(error.retryAfter).toBeUndefined()
+  })
+
+  test('says how many seconds to wait', () => {
+    const { title, description } = describeError(
+      new ApiError('rate-limited', { status: 429, retryAfter: 37 }),
+    )
+
+    // The title already says it; the text only says when to try again.
+    expect(title).toBe('Забагато запитів')
+    expect(description).toBe('Спробуйте ще раз через 37 с.')
+  })
+
+  test('still explains itself without the header', () => {
+    expect(describeError(new ApiError('rate-limited', { status: 429 })).description).toBe(
+      'Спробуйте ще раз трохи згодом.',
+    )
+  })
+})
+
 describe('describeError', () => {
   test('prefers the server detail', () => {
     expect(
@@ -257,6 +311,7 @@ describe('describeError', () => {
       'invalid-image',
       'host-not-allowed',
       'origin-not-allowed',
+      'rate-limited',
       'too-large',
       'unsupported-format',
       'validation',

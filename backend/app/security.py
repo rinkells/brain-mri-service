@@ -73,3 +73,41 @@ class OriginCheckMiddleware:
                 await response(scope, receive, send)
                 return
         await self.app(scope, receive, send)
+
+
+CROSS_SITE_DETAIL = (
+    "Запити зі сторінок інших сайтів заборонено. Дозволені джерела задає ALLOWED_ORIGINS."
+)
+# Sec-Fetch-Site values of requests made by a page of another site.
+FOREIGN_SITES = frozenset({"cross-site", "same-site"})
+# Never checked: the container healthchecks call it, and it reveals nothing.
+UNCHECKED_PATHS = frozenset({"/health"})
+
+
+class CrossSiteCheckMiddleware:
+    """Answer 403 to any request a page of another site makes through the browser.
+
+    Browsers mark every request with Sec-Fetch-Site. "cross-site" and "same-site" mean
+    another page made it, e.g. <img src="http://localhost:8080/stats"> or a no-cors
+    fetch; such a GET passes the Origin check (which covers writes only) and would
+    otherwise use up the client's rate limit. It is let through only from an Origin in
+    ALLOWED_ORIGINS. "same-origin", "none" (typed in the address bar) and requests
+    without the header (curl, scripts, tests) pass. Runs after the Origin check and
+    before the rate limit, so a refused request counts for nothing.
+    """
+
+    def __init__(self, app: ASGIApp, allowed_origins: Iterable[str]) -> None:
+        self.app = app
+        self.allowed_origins = frozenset(origin.lower() for origin in allowed_origins)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] not in UNCHECKED_PATHS:
+            headers = Headers(scope=scope)
+            site = (headers.get("sec-fetch-site") or "").strip().lower()
+            origin = headers.get("origin")
+            allowed = origin is not None and origin.lower() in self.allowed_origins
+            if site in FOREIGN_SITES and not allowed:
+                response = JSONResponse({"detail": CROSS_SITE_DETAIL}, status_code=403)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)

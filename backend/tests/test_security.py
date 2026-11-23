@@ -99,6 +99,65 @@ def test_reads_from_a_foreign_origin_are_not_blocked(client):
     assert client.get("/health", headers={"Origin": FOREIGN_ORIGIN}).status_code == 200
 
 
+# --- Cross-site requests (Sec-Fetch-Site) ----------------------------------------
+
+CROSS_SITE = {
+    "detail": "Запити зі сторінок інших сайтів заборонено. Дозволені джерела задає "
+    "ALLOWED_ORIGINS."
+}
+# What a browser sends for <img src="http://localhost:8080/stats"> on another site.
+FOREIGN_IMAGE = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"}
+
+
+@pytest.mark.parametrize("site", ["cross-site", "same-site"])
+@pytest.mark.parametrize("path", ["/stats", "/predictions", "/docs", "/openapi.json"])
+def test_a_page_of_another_site_cannot_read_the_api(client, site, path):
+    response = client.get(path, headers={"Sec-Fetch-Site": site})
+
+    assert response.status_code == 403
+    assert response.json() == CROSS_SITE
+    assert_security_headers(response)
+
+
+def test_a_foreign_image_request_is_403(client):
+    assert client.get("/stats", headers=FOREIGN_IMAGE).json() == CROSS_SITE
+
+
+def test_a_foreign_origin_is_403_for_a_cross_site_read(client):
+    headers = {"Sec-Fetch-Site": "cross-site", "Origin": FOREIGN_ORIGIN}
+
+    assert client.get("/stats", headers=headers).status_code == 403
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:5173", "http://127.0.0.1:8000"])
+def test_a_cross_site_request_from_an_allowed_origin_passes(client, origin):
+    headers = {"Sec-Fetch-Site": "cross-site", "Origin": origin}
+
+    # 503: the shared app has no history database; the request got past the checks.
+    assert client.get("/stats", headers=headers).status_code == 503
+    assert post_scan(client, **headers).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"Sec-Fetch-Site": "same-origin"}, {"Sec-Fetch-Site": "none"}, {}],
+    ids=["same-origin", "typed-in-the-address-bar", "no-header-curl"],
+)
+def test_own_pages_and_clients_without_sec_fetch_pass(client, headers):
+    assert client.get("/stats", headers=headers).status_code == 503
+    assert post_scan(client, **headers).status_code == 200
+
+
+def test_health_is_not_checked_for_cross_site(client):
+    assert client.get("/health", headers=FOREIGN_IMAGE).status_code == 200
+
+
+def test_the_origin_check_answers_first_for_a_foreign_post(client):
+    headers = {"Sec-Fetch-Site": "cross-site", "Origin": FOREIGN_ORIGIN}
+
+    assert post_scan(client, **headers).json() == FORBIDDEN_ORIGIN
+
+
 # --- Host ----------------------------------------------------------------------
 
 

@@ -61,6 +61,9 @@ def settings(weights_path):
         max_pixels=MAX_PIXELS,
         low_confidence_threshold=LOW_CONFIDENCE_THRESHOLD,
         allowed_hosts=[*PRODUCTION_HOSTS, TEST_HOST],
+        # The shared app serves every test; with a limit its requests would add up across
+        # them. test_rate_limit.py switches it on with its own limits and a fake clock.
+        rate_limit_enabled=False,
     )
 
 
