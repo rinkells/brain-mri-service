@@ -1,14 +1,26 @@
-"""Table of the prediction history.
+"""Tables: users, their sessions and the prediction history.
 
 Only the outcome of a prediction is stored. The scan itself, the file name and
 anything that identifies the file, such as its hash, are never saved: they are
-medical data.
+medical data. A user's password is kept only as an argon2id hash, and a session
+only as the SHA-256 of its token.
 """
 
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, Dialect, String, TypeDecorator, Uuid
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Dialect,
+    ForeignKey,
+    Index,
+    String,
+    TypeDecorator,
+    Uuid,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -51,6 +63,48 @@ def utc_now() -> datetime:
 
 _CLASS_LIST = ", ".join(f"'{name}'" for name in CLASS_NAMES)
 
+# Longest user name (see app.auth for what a name may hold).
+USERNAME_MAX_LENGTH = 32
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    # Kept as typed; unique without regard to case (index below).
+    username: Mapped[str] = mapped_column(String(USERNAME_MAX_LENGTH))
+    # argon2id in PHC format, e.g. $argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>.
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+    def __repr__(self) -> str:
+        # Never the password hash.
+        return f"User(id={self.id}, username={self.username!r})"
+
+
+# lower() only, not casefold: names are ASCII (app.auth), where the two agree.
+Index("uq_users_username_lower", func.lower(User.username), unique=True)
+
+
+class UserSession(Base):
+    """A signed-in browser. The cookie holds a random token; only its SHA-256 is kept,
+    so a copy of the database cannot be turned into working cookies."""
+
+    __tablename__ = "sessions"
+
+    # Hex SHA-256 of the token.
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    # Expired sessions are refused, and deleted at the next sign-in of anyone.
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+    def __repr__(self) -> str:
+        # Never the id: it is a hash of the token.
+        return f"UserSession(user_id={self.user_id}, expires_at={self.expires_at})"
+
 
 class PredictionRecord(Base):
     __tablename__ = "predictions"
@@ -62,6 +116,8 @@ class PredictionRecord(Base):
         CheckConstraint("jsonb_typeof(warnings) = 'array'", name="warnings_is_array").ddl_if(
             dialect="postgresql"
         ),
+        # One user's history, newest first.
+        Index("ix_predictions_user_id_created_at", "user_id", "created_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -76,3 +132,8 @@ class PredictionRecord(Base):
     # MODEL_VERSION of the weights that made the prediction. There is no default:
     # every new record must name its model (older records were filled in by migration 0002).
     model_version: Mapped[str] = mapped_column(String(64))
+    # The user who made the prediction. NULL for records saved before accounts existed
+    # (migration 0005): those are shown to nobody. Deleting the user deletes its records.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), default=None
+    )
