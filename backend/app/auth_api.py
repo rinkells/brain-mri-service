@@ -69,6 +69,9 @@ INVALID_CREDENTIALS_RESPONSE = {
         ),
     }
 }
+BODY_TOO_LARGE_RESPONSE = {
+    413: {"model": ErrorResponse, "description": "Тіло запиту більше за 8 КіБ"}
+}
 INVALID_PASSWORD_BODY_RESPONSE = {
     422: {"model": ErrorResponse, "description": "Тіло не є JSON-об'єктом із текстовим password"}
 }
@@ -144,6 +147,7 @@ async def begin_session(request: Request, response: Response, user: SessionUser)
     response_model=UserResponse,
     responses={
         **INVALID_CREDENTIALS_RESPONSE,
+        **BODY_TOO_LARGE_RESPONSE,
         **FORBIDDEN_WRITE_RESPONSE,
         **UNAVAILABLE_RESPONSE,
         409: {"model": ErrorResponse, "description": "Ім'я вже зайняте (без урахування регістру)"},
@@ -175,6 +179,7 @@ async def register(request: Request, response: Response, body: CredentialsReques
     response_model=UserResponse,
     responses={
         **INVALID_CREDENTIALS_RESPONSE,
+        **BODY_TOO_LARGE_RESPONSE,
         **FORBIDDEN_WRITE_RESPONSE,
         **UNAVAILABLE_RESPONSE,
         401: {
@@ -242,6 +247,7 @@ async def me(user: CurrentUser) -> UserResponse:
     responses={
         **UNAUTHORIZED_RESPONSE,
         **INVALID_PASSWORD_BODY_RESPONSE,
+        **BODY_TOO_LARGE_RESPONSE,
         **UNAVAILABLE_RESPONSE,
         403: {
             "model": ErrorResponse,

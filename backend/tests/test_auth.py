@@ -906,6 +906,7 @@ def test_openapi_documents_the_auth_responses(client):
         assert codes <= set(paths[path][method]["responses"]), (path, method)
     with_body = [("/auth/register", "post"), ("/auth/login", "post"), ("/auth/me", "delete")]
     for path, method in with_body:
+        assert "413" in paths[path][method]["responses"], (path, method)
         body = paths[path][method]["responses"]["422"]["content"]["application/json"]["schema"]
         assert body["$ref"].endswith("/ErrorResponse"), (path, method)
     password = schema["components"]["schemas"]["CredentialsRequest"]["properties"]["password"]
