@@ -4,6 +4,8 @@ import { login, register } from '../../api/client'
 import type { User } from '../../api/types'
 import { VIEW_HASH } from '../../hooks/useView'
 import {
+  PASSWORD_MAX_LENGTH,
+  USERNAME_MAX_LENGTH,
   validateCredentials,
   type CredentialsErrors,
   type CredentialsInput,
@@ -46,12 +48,23 @@ interface FieldProps {
   onChange: (value: string) => void
   type: 'text' | 'password'
   autoComplete: string
+  maxLength: number
   error?: string
   hint?: string
   inputRef: RefObject<HTMLInputElement | null>
 }
 
-function Field({ label, value, onChange, type, autoComplete, error, hint, inputRef }: FieldProps) {
+function Field({
+  label,
+  value,
+  onChange,
+  type,
+  autoComplete,
+  maxLength,
+  error,
+  hint,
+  inputRef,
+}: FieldProps) {
   const id = useId()
   const errorId = `${id}-error`
   const hintId = `${id}-hint`
@@ -70,6 +83,7 @@ function Field({ label, value, onChange, type, autoComplete, error, hint, inputR
         value={value}
         onChange={(event) => onChange(event.target.value)}
         autoComplete={autoComplete}
+        maxLength={maxLength}
         autoCapitalize="none"
         autoCorrect="off"
         spellCheck={false}
@@ -174,6 +188,7 @@ export function AuthForm({ mode, onSuccess }: AuthFormProps) {
         onChange={setUsername}
         type="text"
         autoComplete="username"
+        maxLength={USERNAME_MAX_LENGTH}
         error={errors.username}
         hint={mode === 'register' ? HINTS.username : undefined}
         inputRef={usernameRef}
@@ -184,6 +199,7 @@ export function AuthForm({ mode, onSuccess }: AuthFormProps) {
         onChange={setPassword}
         type={passwordType}
         autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+        maxLength={PASSWORD_MAX_LENGTH}
         error={errors.password}
         hint={mode === 'register' ? HINTS.password : undefined}
         inputRef={passwordRef}
@@ -195,6 +211,7 @@ export function AuthForm({ mode, onSuccess }: AuthFormProps) {
           onChange={setConfirm}
           type={passwordType}
           autoComplete="new-password"
+          maxLength={PASSWORD_MAX_LENGTH}
           error={errors.confirm}
           inputRef={confirmRef}
         />

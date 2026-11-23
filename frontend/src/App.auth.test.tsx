@@ -649,3 +649,33 @@ describe('sign-in errors told apart by their code', () => {
     expect(alert).not.toHaveTextContent('Файл')
   })
 })
+
+describe('the fields are no longer than the backend allows', () => {
+  test('sign-in and registration', async () => {
+    mockApi()
+    window.location.hash = '#/login'
+    render(<App />)
+
+    expect(await screen.findByLabelText('Ім’я користувача')).toHaveAttribute('maxlength', '32')
+    expect(field('Пароль')).toHaveAttribute('maxlength', '128')
+
+    window.location.hash = '#/register'
+    await screen.findByRole('heading', { name: 'Реєстрація' })
+    expect(field('Ім’я користувача')).toHaveAttribute('maxlength', '32')
+    expect(field('Пароль')).toHaveAttribute('maxlength', '128')
+    expect(field('Підтвердження пароля')).toHaveAttribute('maxlength', '128')
+  })
+
+  test('the password of the account deletion', async () => {
+    mockApi({ me: signedIn() })
+    const user = userEvent.setup()
+    render(<App />)
+    await openAccountMenu(user)
+    await user.click(screen.getByRole('button', { name: 'Видалити акаунт' }))
+
+    expect(within(screen.getByRole('dialog')).getByLabelText('Пароль')).toHaveAttribute(
+      'maxlength',
+      '128',
+    )
+  })
+})

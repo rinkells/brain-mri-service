@@ -11,6 +11,7 @@ export interface CredentialsInput {
 
 export type CredentialsErrors = Partial<Record<keyof CredentialsInput, string>>
 
+export const USERNAME_MAX_LENGTH = 32
 export const USERNAME_PATTERN = /^[A-Za-z0-9_.-]{3,32}$/
 export const PASSWORD_MIN_LENGTH = 10
 export const PASSWORD_MAX_LENGTH = 128

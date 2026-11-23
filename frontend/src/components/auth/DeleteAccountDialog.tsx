@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 
 import { deleteAccount } from '../../api/client'
+import { PASSWORD_MAX_LENGTH } from '../../lib/credentials'
 import { ErrorAlert } from '../status/ErrorAlert'
 
 interface DeleteAccountDialogProps {
@@ -100,6 +101,7 @@ export function DeleteAccountDialog({ username, onCancel, onDeleted }: DeleteAcc
               id={passwordId}
               type="password"
               autoComplete="current-password"
+              maxLength={PASSWORD_MAX_LENGTH}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:outline-none dark:border-slate-700 dark:bg-slate-900"
