@@ -10,7 +10,7 @@ import { HistoryPage } from './components/history/HistoryPage'
 import { ViewTabs } from './components/layout/ViewTabs'
 import { HealthIndicator } from './components/status/HealthIndicator'
 import { ThemeToggle } from './components/theme/ThemeToggle'
-import { useAuth } from './hooks/useAuth'
+import { useAuth, type AuthState } from './hooks/useAuth'
 import { useHealth } from './hooks/useHealth'
 import { useTheme } from './hooks/useTheme'
 import { VIEW_HASH, isContentView, useView, type ContentView } from './hooks/useView'
@@ -76,9 +76,14 @@ function Shell() {
   )
 }
 
-function HistoryView({ status }: { status: 'loading' | 'anonymous' | 'signed-in' }) {
+function HistoryView({ status }: { status: AuthState['status'] }) {
   if (status === 'loading') {
     return <p className="text-center text-slate-500 dark:text-slate-400">Перевіряємо вхід…</p>
   }
-  return status === 'signed-in' ? <HistoryPage /> : <SignInPrompt />
+  if (status === 'anonymous') {
+    return <SignInPrompt />
+  }
+  // Signed in, or not known yet: the session cookie may well be valid, so the history is
+  // asked for; a 401 makes the visitor a guest (AuthProvider).
+  return <HistoryPage />
 }

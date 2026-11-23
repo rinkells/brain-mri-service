@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { getMe, logout, onSessionExpired } from '../../api/client'
-import { describeError } from '../../api/errors'
+import { ApiError, describeError } from '../../api/errors'
 import type { User } from '../../api/types'
 import { AuthContext, type AuthState, type Notice } from '../../hooks/useAuth'
 import { VIEW_HASH } from '../../hooks/useView'
@@ -12,6 +12,24 @@ const SESSION_ENDED: Notice = {
   description: 'Увійдіть знову.',
   offerSignIn: true,
 }
+/** Waits before asking GET /auth/me again after a failure without Retry-After: 5 s, then
+ * twice as long each time, up to a minute. */
+const FIRST_RETRY_S = 5
+const LAST_RETRY_S = 60
+
+function retryDelayMs(error: unknown, failures: number): number {
+  const seconds =
+    error instanceof ApiError && error.retryAfter !== undefined
+      ? Math.max(1, error.retryAfter)
+      : Math.min(FIRST_RETRY_S * 2 ** (failures - 1), LAST_RETRY_S)
+  return seconds * 1000
+}
+
+/** Not yet known who it is: the answer of GET /auth/me may still change that. */
+function undecided(state: AuthState): boolean {
+  return state.status === 'loading' || state.status === 'unknown'
+}
+
 const ACCOUNT_DELETED: Notice = {
   tone: 'info',
   title: 'Обліковий запис видалено',
@@ -19,9 +37,11 @@ const ACCOUNT_DELETED: Notice = {
 }
 
 /**
- * Asks GET /auth/me once on load (401: anonymous) and keeps the answer in memory only:
- * nothing goes to localStorage or sessionStorage. A 401 from any route that needs a
- * session (reported by the API client) signs the user out here.
+ * Asks GET /auth/me on load (401: anonymous) and keeps the answer in memory only: nothing
+ * goes to localStorage or sessionStorage. Any other failure (429, 503, no connection)
+ * says nothing about the session, so the state becomes 'unknown' and the question is
+ * asked again later. A 401 from any route that needs a session (reported by the API
+ * client) signs the user out here.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<AuthState>({ status: 'loading' })
@@ -35,22 +55,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const controller = new AbortController()
-    getMe(controller.signal).then(
-      (user) => setAuth(user ? { status: 'signed-in', user } : { status: 'anonymous' }),
-      () => {
-        // Unreachable or without a database: nobody can be signed in.
-        if (!controller.signal.aborted) {
-          setAuth({ status: 'anonymous' })
-        }
-      },
-    )
-    return () => controller.abort()
+    let timer: number | undefined
+    let failures = 0
+
+    function settle(next: AuthState) {
+      // A sign-in or a 401 elsewhere may have decided it in the meantime.
+      if (undecided(authRef.current)) {
+        authRef.current = next
+        setAuth(next)
+      }
+    }
+
+    function ask() {
+      getMe(controller.signal).then(
+        (user) => settle(user ? { status: 'signed-in', user } : { status: 'anonymous' }),
+        (error: unknown) => {
+          if (controller.signal.aborted || !undecided(authRef.current)) {
+            return
+          }
+          failures += 1
+          settle({ status: 'unknown' })
+          timer = window.setTimeout(ask, retryDelayMs(error, failures))
+        },
+      )
+    }
+
+    ask()
+    return () => {
+      controller.abort()
+      window.clearTimeout(timer)
+    }
   }, [])
 
   useEffect(
     () =>
       onSessionExpired((source) => {
-        if (authRef.current.status !== 'signed-in') {
+        const { status } = authRef.current
+        if (status === 'unknown') {
+          // Now it is known: no valid session. Nobody was shown as signed in, so no notice.
+          authRef.current = { status: 'anonymous' }
+          setAuth({ status: 'anonymous' })
+          return
+        }
+        if (status !== 'signed-in') {
           return
         }
         authRef.current = { status: 'anonymous' }

@@ -11,7 +11,8 @@ const LINK_CLASS =
 export function AccountArea() {
   const { auth } = useAuth()
 
-  if (auth.status === 'loading') {
+  // Nothing until it is known whether someone is signed in.
+  if (auth.status === 'loading' || auth.status === 'unknown') {
     return null
   }
   if (auth.status === 'anonymous') {

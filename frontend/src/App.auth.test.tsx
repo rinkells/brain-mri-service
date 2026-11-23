@@ -542,3 +542,67 @@ test('accounts leave nothing in localStorage or sessionStorage', async () => {
   expect(localStorage.length).toBe(0)
   expect(sessionStorage.length).toBe(0)
 })
+
+// --- GET /auth/me fails for a while ---------------------------------------------------------
+
+describe('when GET /auth/me fails for a while (429, 503, no connection)', () => {
+  const failures = [
+    ['429', () => tooMany(30, 'Забагато запитів. Спробуйте ще раз через 30 с.')],
+    ['503', () => jsonResponse({ detail: 'База даних недоступна. Спробуйте пізніше.' }, 503)],
+    ['no connection', () => Promise.reject(new TypeError('Failed to fetch'))],
+  ] as const
+
+  test.each(failures)('%s does not make the user a guest or show anything extra', async (_, me) => {
+    const fetchMock = mockApi({ me, ...historyHandlers() })
+    window.location.hash = '#/history'
+
+    render(<App />)
+
+    // The cookie may well be valid: the history is asked for as usual.
+    expect(await screen.findByRole('heading', { name: 'Історія прогнозів' })).toBeInTheDocument()
+    expect(callsTo(fetchMock, '/auth/me')).toHaveLength(1)
+    expect(within(banner()).queryByRole('link', { name: 'Увійти' })).not.toBeInTheDocument()
+    expect(
+      within(banner()).queryByRole('link', { name: 'Зареєструватися' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Історія доступна після входу' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: 'Повідомлення' })).not.toBeInTheDocument()
+  })
+
+  test('a 401 of the history then shows a guest, without "the session ended"', async () => {
+    mockApi({
+      me: () => tooMany(30, 'Забагато запитів. Спробуйте ще раз через 30 с.'),
+      predictions: sessionExpired,
+      stats: sessionExpired,
+    })
+    window.location.hash = '#/history'
+
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Історія доступна після входу' }),
+    ).toBeInTheDocument()
+    expect(within(banner()).getByRole('link', { name: 'Увійти' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+  })
+
+  test('it is asked again after Retry-After, and the user appears', async () => {
+    let calls = 0
+    const fetchMock = mockApi({
+      me: () =>
+        ++calls === 1
+          ? tooMany(1, 'Забагато запитів. Спробуйте ще раз через 1 с.')
+          : jsonResponse(makeUser()),
+    })
+
+    render(<App />)
+
+    expect(
+      await within(banner()).findByRole('button', { name: /alice/ }, { timeout: 3000 }),
+    ).toBeInTheDocument()
+    expect(callsTo(fetchMock, '/auth/me')).toHaveLength(2)
+  })
+})

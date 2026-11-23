@@ -5,6 +5,9 @@ import type { User } from '../api/types'
 /** Who uses the interface. The session itself is an HttpOnly cookie the page never sees. */
 export type AuthState =
   | { status: 'loading' } // GET /auth/me has not answered yet
+  // GET /auth/me failed for another reason than 401 (429, 503, no connection): nobody is
+  // shown as a guest or as signed in, and it is asked again a little later.
+  | { status: 'unknown' }
   | { status: 'anonymous' }
   | { status: 'signed-in'; user: User }
 
