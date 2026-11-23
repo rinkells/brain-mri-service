@@ -3,7 +3,6 @@
 import logging
 import time
 
-from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.concurrency import run_in_threadpool
@@ -21,6 +20,7 @@ from app.auth import (
     needs_session,
 )
 from app.database import Database
+from app.errors import DATABASE_NOT_CONFIGURED, error_response
 from app.history import SAVE_RETRY_AFTER_S
 from app.history_api import DATABASE_UNAVAILABLE, HISTORY_DISABLED
 from app.security import session_cookie
@@ -65,7 +65,9 @@ class SessionMiddleware:
         user: SessionUser | None = None
         if required:
             if database is None:
-                await self._refuse(scope, receive, send, 503, HISTORY_DISABLED)
+                await self._refuse(
+                    scope, receive, send, 503, HISTORY_DISABLED, code=DATABASE_NOT_CONFIGURED
+                )
                 return
             if token is None:
                 await self._refuse(scope, receive, send, 401, NOT_SIGNED_IN)
@@ -118,8 +120,9 @@ class SessionMiddleware:
         status_code: int,
         detail: str,
         clear: bool = False,
+        code: str | None = None,
     ) -> None:
-        response = JSONResponse({"detail": detail}, status_code=status_code)
+        response = error_response(status_code, detail, code)
         if clear:
             clear_session_cookie(response, scope["app"].state.settings)
         await response(scope, receive, send)

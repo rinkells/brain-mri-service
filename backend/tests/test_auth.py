@@ -36,7 +36,7 @@ LOGIN_FAILED = {"detail": "Неправильне ім'я користувача
 NOT_SIGNED_IN = {"detail": "Потрібно увійти в обліковий запис."}
 SESSION_EXPIRED = {"detail": "Сесія недійсна або закінчилася. Увійдіть знову."}
 USERNAME_TAKEN = {"detail": "Це ім'я користувача вже зайняте."}
-PASSWORD_MISMATCH = {"detail": "Неправильний пароль."}
+PASSWORD_MISMATCH = {"detail": "Неправильний пароль.", "code": "wrong_password"}
 BAD_USERNAME = (
     "Ім'я користувача має містити від 3 до 32 символів: латинські літери, цифри, «_», «.» "
     "або «-»."
@@ -704,6 +704,7 @@ def test_accounts_need_a_database(client, method, path, body):
 
     assert response.status_code == 503
     assert "DATABASE_URL" in response.json()["detail"]
+    assert response.json()["code"] == "database_not_configured"
 
 
 def test_logout_works_without_a_database(client):
@@ -917,7 +918,10 @@ def test_openapi_documents_the_auth_responses(client):
 
 # --- Size of /auth/* bodies ------------------------------------------------------------
 
-AUTH_BODY_TOO_LARGE = {"detail": "Тіло запиту до /auth/* завелике: дозволено не більше 8 КіБ."}
+AUTH_BODY_TOO_LARGE = {
+    "detail": "Тіло запиту до /auth/* завелике: дозволено не більше 8 КіБ.",
+    "code": "body_too_large",
+}
 AUTH_BODY_LIMIT = 8 * 1024
 JSON = {"Content-Type": "application/json"}
 
@@ -999,3 +1003,59 @@ def test_registration_counts_towards_the_sessions_of_a_user(app, browser, databa
 
     assert {row.id for row in sessions(database)} == {session_id_of(token) for token in later}
     assert holding(app, first).get("/auth/me").json() == SESSION_EXPIRED
+
+
+# --- A stable code for the errors the interface tells apart ------------------------------
+
+
+@pytest.mark.parametrize(
+    "path", ["/predictions", "/stats", "/predictions/6f1c2a3e-0000-4000-8000-000000000001"]
+)
+def test_history_without_a_database_says_so_with_a_code(client, path):
+    response = client.get(path)
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Облікові записи та історію вимкнено: не задано DATABASE_URL.",
+        "code": "database_not_configured",
+    }
+
+
+def test_a_foreign_origin_on_account_deletion_has_no_wrong_password_code(browser):
+    """Both are 403: only the code tells a wrong password from the Origin check."""
+    register(browser)
+
+    refused = browser.request(
+        "DELETE", "/auth/me", json={"password": PASSWORD}, headers={"Origin": "https://evil.ex"}
+    )
+
+    assert refused.status_code == 403
+    assert refused.json() == FOREIGN_ORIGIN
+
+
+def test_errors_without_a_code_keep_their_old_shape(app, browser):
+    """code is added only where the interface needs it; other bodies are unchanged."""
+    register(browser)
+
+    for response in (
+        browser.get("/predictions/6f1c2a3e-0000-4000-8000-000000000001"),
+        login(new_browser(app), "alice", WRONG_PASSWORD),
+        new_browser(app).get("/auth/me"),
+        register(new_browser(app), "alice"),
+    ):
+        assert set(response.json()) == {"detail"}, response.request.url
+
+
+def test_openapi_documents_the_error_code(client):
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["ErrorResponse"]
+
+    assert schema["required"] == ["detail"]
+    code = schema["properties"]["code"]
+    for value in (
+        "database_not_configured",
+        "login_locked",
+        "rate_limited",
+        "wrong_password",
+        "body_too_large",
+    ):
+        assert value in code["description"], value

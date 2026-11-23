@@ -12,11 +12,11 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Callable
 
-from fastapi.responses import JSONResponse
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.addresses import IPAddress, parse_address
+from app.errors import RATE_LIMITED, error_response
 from app.config import Settings
 from app.schemas import ErrorResponse
 
@@ -260,9 +260,10 @@ class RateLimitMiddleware:
                 wait = state.rate_limiters[bucket].hit(key)
                 if wait > 0:
                     seconds = retry_after_seconds(wait)
-                    response = JSONResponse(
-                        {"detail": too_many_requests_detail(seconds)},
-                        status_code=429,
+                    response = error_response(
+                        429,
+                        too_many_requests_detail(seconds),
+                        RATE_LIMITED,
                         headers={"Retry-After": str(seconds)},
                     )
                     await response(scope, receive, send)

@@ -45,6 +45,14 @@ class FakeClock:
         self.now += seconds
 
 
+def too_many_requests(seconds: int) -> dict:
+    """The body of a 429 from the per-minute limits."""
+    return {
+        "detail": f"Забагато запитів. Спробуйте ще раз через {seconds} с.",
+        "code": "rate_limited",
+    }
+
+
 # --- The window ------------------------------------------------------------------
 
 
@@ -462,7 +470,7 @@ def test_429_after_the_limit_with_retry_after_and_the_usual_error_format(limited
 
     assert refused.status_code == 429
     assert refused.headers["Retry-After"] == "40"
-    assert refused.json() == {"detail": "Забагато запитів. Спробуйте ще раз через 40 с."}
+    assert refused.json() == too_many_requests(40)
     for name in ("X-Content-Type-Options", "X-Frame-Options", "Referrer-Policy"):
         assert name in refused.headers
 
@@ -662,7 +670,10 @@ WRONG = "wrong-horse-22"
 
 
 def too_many_failures(seconds: int) -> dict:
-    return {"detail": f"Забагато невдалих спроб входу. Спробуйте ще раз через {seconds} с."}
+    return {
+        "detail": f"Забагато невдалих спроб входу. Спробуйте ще раз через {seconds} с.",
+        "code": "login_locked",
+    }
 
 
 @pytest.fixture
@@ -698,7 +709,7 @@ def test_auth_requests_have_their_own_bucket(accounts, limited):
 
     assert refused.status_code == 429
     assert refused.headers["Retry-After"] == "60"
-    assert refused.json() == {"detail": "Забагато запитів. Спробуйте ще раз через 60 с."}
+    assert refused.json() == too_many_requests(60)
     assert refused.headers["cache-control"] == "no-store"
     # The other buckets are untouched.
     assert post_scan(browser).status_code == 200
@@ -875,7 +886,7 @@ def test_sign_in_and_registration_still_get_429_after_ten(accounts, limited):
     assert attempts == [401] * 5 + [201] * 5
     for refused in (login(connect(), "nobody99", WRONG), register_as(connect(), "new_user99")):
         assert refused.status_code == 429
-        assert refused.json() == {"detail": "Забагато запитів. Спробуйте ще раз через 60 с."}
+        assert refused.json() == too_many_requests(60)
         assert refused.headers["Retry-After"] == "60"
 
 
@@ -903,7 +914,7 @@ def test_logout_and_account_deletion_count_as_writes(accounts, limited):
     refused = browser.request("DELETE", "/auth/me", json={"password": TEST_PASSWORD})
 
     assert refused.status_code == 429
-    assert refused.json() == {"detail": "Забагато запитів. Спробуйте ще раз через 60 с."}
+    assert refused.json() == too_many_requests(60)
     # The auth bucket is untouched by them: the first sign-in is its only request so far.
     assert login(connect()).status_code == 200
     assert login(connect()).status_code == 200

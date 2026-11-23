@@ -37,6 +37,12 @@ from app.auth import (
 from app.auth_api import body_validation_error_handler
 from app.auth_api import router as auth_router
 from app.database import Database
+from app.errors import (
+    BODY_TOO_LARGE,
+    CodedHTTPException,
+    coded_http_exception_handler,
+    error_body,
+)
 from app.gradcam import encode_png_base64, overlay_heatmap
 from app.history import save_prediction
 from app.history_api import DATABASE_REJECTED_VALUE, DATABASE_UNAVAILABLE
@@ -111,13 +117,13 @@ class MaxBodySizeMiddleware:
             return
 
         if scope["path"].startswith(AUTH_PREFIX):
-            max_bytes, detail = AUTH_MAX_BODY_BYTES, AUTH_BODY_TOO_LARGE
+            max_bytes, detail, code = AUTH_MAX_BODY_BYTES, AUTH_BODY_TOO_LARGE, BODY_TOO_LARGE
         else:
-            max_bytes, detail = self.max_bytes, self.detail
+            max_bytes, detail, code = self.max_bytes, self.detail, None
 
         declared = Headers(scope=scope).get("content-length", "")
         if declared.isdigit() and int(declared) > max_bytes:
-            response = JSONResponse({"detail": detail}, status_code=413)
+            response = JSONResponse(error_body(detail, code), status_code=413)
             await response(scope, receive, send)
             return
 
@@ -131,6 +137,8 @@ class MaxBodySizeMiddleware:
                 received += len(message.get("body", b""))
                 if received > max_bytes:
                     # Raised while FastAPI reads the form or the JSON; it becomes a 413.
+                    if code is not None:
+                        raise CodedHTTPException(413, detail, code)
                     raise HTTPException(status_code=413, detail=detail)
             return message
 
@@ -427,6 +435,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(OperationalError, database_unavailable_handler)
     app.add_exception_handler(PoolTimeoutError, database_unavailable_handler)
     app.add_exception_handler(DataError, database_data_error_handler)
+    # Errors the interface tells apart carry a stable code next to the text.
+    app.add_exception_handler(CodedHTTPException, coded_http_exception_handler)
     # Bodies of /auth/* that cannot be parsed get 422 without the values they held.
     app.add_exception_handler(RequestValidationError, body_validation_error_handler)
     app.include_router(router)

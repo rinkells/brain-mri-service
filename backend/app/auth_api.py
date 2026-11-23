@@ -31,6 +31,7 @@ from app.auth import (
     username_taken,
 )
 from app.database import Database
+from app.errors import DATABASE_NOT_CONFIGURED, LOGIN_LOCKED, WRONG_PASSWORD, CodedHTTPException
 from app.history_api import HISTORY_DISABLED, UNAVAILABLE_RESPONSE
 from app.rate_limit import (
     rate_limited_response,
@@ -94,7 +95,7 @@ async def body_validation_error_handler(
 def database_of(request: Request) -> Database:
     database: Database | None = request.app.state.database
     if database is None:
-        raise HTTPException(status_code=503, detail=HISTORY_DISABLED)
+        raise CodedHTTPException(503, HISTORY_DISABLED, DATABASE_NOT_CONFIGURED)
     return database
 
 
@@ -121,9 +122,10 @@ def refuse_while_failing(request: Request, key: str) -> None:
             seconds,
             rate_limit_key(request.scope, settings.trusted_proxy_addresses),
         )
-        raise HTTPException(
-            status_code=429,
-            detail=too_many_failures_detail(seconds),
+        raise CodedHTTPException(
+            429,
+            too_many_failures_detail(seconds),
+            LOGIN_LOCKED,
             headers={"Retry-After": str(seconds)},
         )
 
@@ -282,7 +284,7 @@ async def delete_me(request: Request, user: CurrentUser, body: DeleteAccountRequ
     passwords: Passwords = request.app.state.passwords
     if not await passwords.verify(stored_hash, body.password.get_secret_value()):
         request.app.state.login_failures.hit(key)
-        raise HTTPException(status_code=403, detail=PASSWORD_MISMATCH)
+        raise CodedHTTPException(403, PASSWORD_MISMATCH, WRONG_PASSWORD)
     request.app.state.login_failures.forget(key)
 
     await run_in_threadpool(delete_user, database, user.id)
