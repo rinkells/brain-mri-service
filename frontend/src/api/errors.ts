@@ -10,6 +10,12 @@ export type ApiErrorKind =
   | 'busy' // 503 from /predict: too many scans are being analysed
   | 'database-unavailable' // 503 from the history: it is disabled or its database is down
   | 'unavailable' // no connection, or the dev proxy could not reach the backend
+  | 'login-failed' // 401 from /auth/login: wrong name or password (one answer for both)
+  | 'login-blocked' // 429 from /auth/login: too many failed attempts for this name
+  | 'username-taken' // 409 from /auth/register
+  | 'wrong-password' // 403 from DELETE /auth/me
+  | 'session-expired' // 401 from a route that needs a session: it ended or is invalid
+  | 'session-expired-unsaved' // 401 from /predict: the session ended, nothing was saved
   | 'server' // any other failure
 
 export class ApiError extends Error {
@@ -90,9 +96,43 @@ export function describeError(error: unknown): ErrorDescription {
         description: error.detail ?? 'Сервер приймає лише знімки у форматі JPEG або PNG.',
       }
     case 'validation':
+      // /auth/* explain the problem in one sentence; FastAPI's own list is not shown.
+      return error.detail
+        ? { title: 'Перевірте дані', description: error.detail }
+        : {
+            title: 'Сервер не прийняв запит',
+            description: 'Запит сформовано неправильно. Оберіть файл ще раз і повторіть спробу.',
+          }
+    case 'login-failed':
       return {
-        title: 'Сервер не прийняв запит',
-        description: 'Запит сформовано неправильно. Оберіть файл ще раз і повторіть спробу.',
+        title: 'Не вдалося увійти',
+        description: 'Неправильне ім’я користувача або пароль.',
+      }
+    case 'login-blocked':
+      return {
+        title: 'Вхід тимчасово заблоковано',
+        description:
+          'Забагато невдалих спроб входу. ' +
+          (error.retryAfter === undefined
+            ? 'Спробуйте ще раз трохи згодом.'
+            : `Спробуйте ще раз через ${error.retryAfter} с.`),
+      }
+    case 'username-taken':
+      return {
+        title: 'Ім’я зайняте',
+        description: 'Це ім’я користувача вже зайняте. Оберіть інше.',
+      }
+    case 'wrong-password':
+      return {
+        title: 'Неправильний пароль',
+        description: 'Обліковий запис не видалено. Перевірте пароль і спробуйте ще раз.',
+      }
+    case 'session-expired':
+      return { title: 'Сеанс завершився', description: 'Увійдіть знову.' }
+    case 'session-expired-unsaved':
+      return {
+        title: 'Сеанс завершився, результат не збережено',
+        description: 'Спробуйте ще раз.',
       }
     case 'rate-limited':
       return {

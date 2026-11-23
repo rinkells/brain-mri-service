@@ -6,6 +6,7 @@ import type {
   PredictionRecord,
   PredictionResponse,
   StatsResponse,
+  User,
 } from '../api/types'
 
 export function jsonResponse(body: unknown, status = 200): Response {
@@ -76,6 +77,39 @@ export function makeFile(name = 'scan.png', type = 'image/png', size = 2048): Fi
   return file
 }
 
+export function makeUser(overrides: Partial<User> = {}): User {
+  return {
+    id: '5d7a3c1e-0000-4000-8000-0000000000a1',
+    username: 'alice',
+    created_at: '2026-11-23T10:00:00Z',
+    ...overrides,
+  }
+}
+
+/** What GET /auth/me answers without a session. */
+export function notSignedIn(): Response {
+  return jsonResponse({ detail: 'Потрібно увійти в обліковий запис.' }, 401)
+}
+
+/** What the API answers when the session cookie names no valid session. */
+export function sessionExpired(): Response {
+  return jsonResponse({ detail: 'Сесія недійсна або закінчилася. Увійдіть знову.' }, 401)
+}
+
+export function noContent(): Response {
+  return new Response(null, { status: 204 })
+}
+
+/** A 429 with the Retry-After header and the server's text. */
+export function tooMany(seconds: number, detail: string): Response {
+  return Response.json({ detail }, { status: 429, headers: { 'Retry-After': String(seconds) } })
+}
+
+/** The JSON body a request was sent with. */
+export function bodyOf(init: RequestInit | undefined): unknown {
+  return JSON.parse(String(init?.body))
+}
+
 type Handler = (url: string, init?: RequestInit) => Response | Promise<Response>
 
 interface Handlers {
@@ -86,6 +120,14 @@ interface Handlers {
   /** DELETE /predictions/{id} */
   deletePrediction?: Handler
   stats?: Handler
+  /** GET /auth/me; defaults to 401 (nobody signed in). */
+  me?: Handler
+  login?: Handler
+  register?: Handler
+  /** POST /auth/logout; defaults to 204. */
+  logout?: Handler
+  /** DELETE /auth/me */
+  deleteAccount?: Handler
 }
 
 function pathOf(input: RequestInfo | URL): string {
@@ -94,7 +136,8 @@ function pathOf(input: RequestInfo | URL): string {
 
 /**
  * Replace fetch with a router for the API paths. `health` defaults to a healthy
- * backend; every other route must be given when the test uses it.
+ * backend, `me` to an anonymous visitor and `logout` to 204; every other route must be
+ * given when the test uses it.
  */
 export function mockApi(handlers: Handlers = {}) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -111,6 +154,14 @@ export function mockApi(handlers: Handlers = {}) {
       handler = handlers.stats
     } else if (path.startsWith('/predictions')) {
       handler = method === 'DELETE' ? handlers.deletePrediction : handlers.predictions
+    } else if (path === '/auth/me') {
+      handler = method === 'DELETE' ? handlers.deleteAccount : (handlers.me ?? notSignedIn)
+    } else if (path === '/auth/login') {
+      handler = handlers.login
+    } else if (path === '/auth/register') {
+      handler = handlers.register
+    } else if (path === '/auth/logout') {
+      handler = handlers.logout ?? noContent
     }
 
     if (!handler) {
