@@ -204,8 +204,16 @@ export interface components {
         };
         /** ErrorResponse */
         ErrorResponse: {
-            /** Detail */
+            /**
+             * Detail
+             * @description Пояснення для людини українською; текст може змінюватися
+             */
             detail: string;
+            /**
+             * Code
+             * @description Сталий код для випадків, які клієнт має розрізняти (текст detail може змінюватися): database_not_configured (503: не задано DATABASE_URL, облікових записів та історії немає), login_locked (429: забагато неправильних паролів для імені з цієї адреси), rate_limited (429: забагато запитів з цієї адреси за хвилину), wrong_password (403 від DELETE /auth/me: неправильний пароль), body_too_large (413: тіло запиту до /auth/* більше за 8 КіБ). В інших помилках поля немає
+             */
+            code?: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
