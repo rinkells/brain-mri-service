@@ -141,8 +141,9 @@ def test_example_env_files_hold_the_default_not_mri_thresholds(path):
 
 # --- Frontend image: the built UI behind nginx ----------------------------------
 
-# The paths the UI calls (frontend/src/api/client.ts), as the Vite dev proxy lists them.
-VITE_PROXY_KEY = re.compile(r"^\s*'(/[a-z]+)':\s*BACKEND_URL", re.MULTILINE)
+# The paths the UI calls (frontend/src/api/client.ts), as the Vite dev proxy lists them,
+# and /health/ready for checking a deployment through the same port.
+VITE_PROXY_KEY = re.compile(r"^\s*'(/[a-z/]+)':\s*BACKEND_URL", re.MULTILINE)
 # location [=|^~] path { ... } blocks; the config has no nested blocks inside them.
 NGINX_LOCATION = re.compile(r"location\s+(?:=\s*|\^~\s*)?(\S+)\s*\{([^}]*)\}")
 SECURITY_HEADERS = {
@@ -197,7 +198,7 @@ def test_nginx_proxies_the_api_paths_of_the_ui_and_nothing_else():
     ui_paths = set(VITE_PROXY_KEY.findall(vite))
     proxied = {path for path, body in NGINX_LOCATION.findall(nginx_conf()) if "proxy_pass" in body}
 
-    assert ui_paths == {"/health", "/predict", "/predictions", "/stats", "/auth"}
+    assert ui_paths == {"/health", "/health/ready", "/predict", "/predictions", "/stats", "/auth"}
     # Vite matches keys as prefixes; nginx needs /predictions/ besides /predictions, and
     # takes everything under /auth/ (the API has no /auth path of its own).
     assert proxied == (ui_paths - {"/auth"}) | {"/predictions/", "/auth/"}
@@ -279,6 +280,36 @@ def test_frontend_service_serves_the_ui_on_localhost_8080(services):
     ]
     assert frontend["depends_on"]["api"]["condition"] == "service_healthy"
     assert frontend["healthcheck"]["test"][0] == "CMD"
+
+
+def test_compose_healthcheck_of_api_asks_for_readiness(services):
+    """The api service is healthy only while the model is loaded and Postgres answers,
+    and frontend waits for exactly that."""
+    healthcheck = services["api"]["healthcheck"]
+    command = " ".join(healthcheck["test"])
+
+    assert healthcheck["test"][0] == "CMD"
+    assert "'http://127.0.0.1:8000/health/ready'" in command
+    # The probe gives up on the database after 2 s; the check must outlast it.
+    assert float(re.search(r"timeout=(\d+(?:\.\d+)?)", command).group(1)) > 2
+    assert healthcheck["timeout"] == "5s"
+    assert services["frontend"]["depends_on"]["api"]["condition"] == "service_healthy"
+
+
+def test_image_healthcheck_stays_on_liveness():
+    """A container started from the image alone (without Compose) has no database to
+    wait for: its own HEALTHCHECK asks /health, which never contacts the database."""
+    healthcheck = re.search(r"^HEALTHCHECK .*\n\s+CMD (.*)$", DOCKERFILE, re.MULTILINE)
+
+    assert healthcheck, "no HEALTHCHECK in the backend Dockerfile"
+    assert "'http://127.0.0.1:8000/health'" in healthcheck.group(1)
+
+
+def test_nginx_forwards_the_readiness_check():
+    locations = dict(NGINX_LOCATION.findall(nginx_conf()))
+
+    assert locations["/health/ready"].strip() == "proxy_pass $api;"
+    assert locations["/health"].strip() == "proxy_pass $api;"
 
 
 def test_frontend_container_is_limited_and_read_only(services):
