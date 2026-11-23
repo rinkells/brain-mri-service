@@ -1,6 +1,8 @@
 import { describe, expect, test, vi } from 'vitest'
 
 import {
+  bodyTooLarge,
+  databaseNotConfigured,
   jsonResponse,
   makeFile,
   makeUser,
@@ -147,7 +149,9 @@ describe('accounts', () => {
   })
 
   test('a 429 of sign-in is the lock after failed attempts, with the seconds to wait', async () => {
-    stubFetch(() => tooMany(660, 'Забагато невдалих спроб входу. Спробуйте ще раз через 660 с.'))
+    stubFetch(() =>
+      tooMany(660, 'Забагато невдалих спроб входу. Спробуйте ще раз через 660 с.', 'login_locked'),
+    )
 
     const error = await captureError(login('alice', 'correct-horse-1'))
 
@@ -169,7 +173,7 @@ describe('accounts', () => {
   })
 
   test('a 403 of the account deletion is a wrong password', async () => {
-    stubFetch(() => jsonResponse({ detail: 'Неправильний пароль.' }, 403))
+    stubFetch(() => jsonResponse({ detail: 'Неправильний пароль.', code: 'wrong_password' }, 403))
 
     const error = await captureError(deleteAccount('wrong-horse-1'))
 
@@ -249,5 +253,61 @@ describe('a session that ended (401), handled in one place', () => {
     await getStats().catch(() => undefined)
 
     expect(sources).toEqual([])
+  })
+})
+
+describe('the kind of an error follows its code, not its text', () => {
+  test('a 429 of sign-in from the per-minute limit is not the lock after failed attempts', async () => {
+    stubFetch(() => tooMany(42, 'Забагато запитів. Спробуйте ще раз через 42 с.', 'rate_limited'))
+
+    const error = await captureError(login('alice', 'correct-horse-1'))
+
+    expect(error.kind).toBe('rate-limited')
+    expect(error.code).toBe('rate_limited')
+    expect(describeError(error)).toEqual({
+      title: 'Забагато запитів',
+      description: 'Спробуйте ще раз через 42 с.',
+    })
+  })
+
+  test('the text alone decides nothing', async () => {
+    // The text of the lock with the code of the per-minute limit.
+    stubFetch(() =>
+      tooMany(10, 'Забагато невдалих спроб входу. Спробуйте ще раз через 10 с.', 'rate_limited'),
+    )
+    expect((await captureError(login('alice', 'correct-horse-1'))).kind).toBe('rate-limited')
+
+    // "Неправильний пароль." without the code is the Origin check, not a wrong password.
+    stubFetch(() => jsonResponse({ detail: 'Неправильний пароль.' }, 403))
+    expect((await captureError(deleteAccount('x'))).kind).toBe('origin-not-allowed')
+
+    // The code with another text is still a wrong password.
+    stubFetch(() => jsonResponse({ detail: 'Інший текст.', code: 'wrong_password' }, 403))
+    expect((await captureError(deleteAccount('x'))).kind).toBe('wrong-password')
+  })
+
+  test.each([
+    ['login', () => login('alice', 'x'.repeat(9000))],
+    ['register', () => register('alice', 'x'.repeat(9000))],
+    ['deleteAccount', () => deleteAccount('x'.repeat(9000))],
+  ])('a 413 of %s is about the name or password, not about a file', async (_, call) => {
+    stubFetch(() => bodyTooLarge())
+
+    const error = await captureError(call())
+
+    expect(error.kind).toBe('credentials-too-long')
+    expect(describeError(error)).toEqual({
+      title: 'Задовгі дані',
+      description: 'Ім’я користувача — не довше за 32 символи, пароль — не довший за 128.',
+    })
+  })
+
+  test('a history without a database keeps its code', async () => {
+    stubFetch(() => databaseNotConfigured())
+
+    const error = await captureError(getStats())
+
+    expect(error.kind).toBe('database-unavailable')
+    expect(error.code).toBe('database_not_configured')
   })
 })

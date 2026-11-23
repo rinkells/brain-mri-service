@@ -5,6 +5,7 @@ import { describe, expect, test } from 'vitest'
 import App from './App'
 import {
   bodyOf,
+  bodyTooLarge,
   callsTo,
   jsonResponse,
   makeFile,
@@ -184,7 +185,12 @@ describe('the sign-in page', () => {
 
   test('after too many failed attempts it says how long to wait', async () => {
     mockApi({
-      login: () => tooMany(660, 'Забагато невдалих спроб входу. Спробуйте ще раз через 660 с.'),
+      login: () =>
+        tooMany(
+          660,
+          'Забагато невдалих спроб входу. Спробуйте ще раз через 660 с.',
+          'login_locked',
+        ),
     })
     window.location.hash = '#/login'
     const user = userEvent.setup()
@@ -460,7 +466,8 @@ describe('deleting the account', () => {
   test('a wrong password keeps the user signed in and says so', async () => {
     mockApi({
       me: signedIn(),
-      deleteAccount: () => jsonResponse({ detail: 'Неправильний пароль.' }, 403),
+      deleteAccount: () =>
+        jsonResponse({ detail: 'Неправильний пароль.', code: 'wrong_password' }, 403),
     })
     const user = userEvent.setup()
     render(<App />)
@@ -604,5 +611,41 @@ describe('when GET /auth/me fails for a while (429, 503, no connection)', () => 
       await within(banner()).findByRole('button', { name: /alice/ }, { timeout: 3000 }),
     ).toBeInTheDocument()
     expect(callsTo(fetchMock, '/auth/me')).toHaveLength(2)
+  })
+})
+
+// --- Review fixes ------------------------------------------------------------------------------
+
+describe('sign-in errors told apart by their code', () => {
+  async function signIn(user: UserEvent) {
+    await user.type(await screen.findByLabelText('Ім’я користувача'), 'alice')
+    await user.type(field('Пароль'), PASSWORD)
+    await user.click(within(form('Вхід')).getByRole('button', { name: 'Увійти' }))
+    return within(form('Вхід')).findByRole('alert')
+  }
+
+  test('the per-minute limit is not called a lock after failed attempts', async () => {
+    mockApi({ login: () => tooMany(42, 'Забагато запитів. Спробуйте ще раз через 42 с.') })
+    window.location.hash = '#/login'
+    const user = userEvent.setup()
+    render(<App />)
+
+    const alert = await signIn(user)
+
+    expect(alert).toHaveTextContent('Забагато запитів')
+    expect(alert).toHaveTextContent('Спробуйте ще раз через 42 с.')
+    expect(alert).not.toHaveTextContent('заблоковано')
+  })
+
+  test('a body over 8 KiB is about the name or password, not a file', async () => {
+    mockApi({ login: bodyTooLarge })
+    window.location.hash = '#/login'
+    const user = userEvent.setup()
+    render(<App />)
+
+    const alert = await signIn(user)
+
+    expect(alert).toHaveTextContent('Задовгі дані')
+    expect(alert).not.toHaveTextContent('Файл')
   })
 })

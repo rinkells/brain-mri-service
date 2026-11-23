@@ -101,8 +101,38 @@ export function noContent(): Response {
 }
 
 /** A 429 with the Retry-After header and the server's text. */
-export function tooMany(seconds: number, detail: string): Response {
-  return Response.json({ detail }, { status: 429, headers: { 'Retry-After': String(seconds) } })
+/** A 429 with the Retry-After header, the server's text and its code. */
+export function tooMany(
+  seconds: number,
+  detail: string,
+  code: 'rate_limited' | 'login_locked' = 'rate_limited',
+): Response {
+  return Response.json(
+    { detail, code },
+    { status: 429, headers: { 'Retry-After': String(seconds) } },
+  )
+}
+
+/** What the API answers to /auth/* and the history when DATABASE_URL is not set. */
+export function databaseNotConfigured(): Response {
+  return jsonResponse(
+    {
+      detail: 'Облікові записи та історію вимкнено: не задано DATABASE_URL.',
+      code: 'database_not_configured',
+    },
+    503,
+  )
+}
+
+/** The 413 of an /auth/* body over 8 KiB. */
+export function bodyTooLarge(): Response {
+  return jsonResponse(
+    {
+      detail: 'Тіло запиту до /auth/* завелике: дозволено не більше 8 КіБ.',
+      code: 'body_too_large',
+    },
+    413,
+  )
 }
 
 /** The JSON body a request was sent with. */

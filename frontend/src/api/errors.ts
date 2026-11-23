@@ -16,7 +16,19 @@ export type ApiErrorKind =
   | 'wrong-password' // 403 from DELETE /auth/me
   | 'session-expired' // 401 from a route that needs a session: it ended or is invalid
   | 'session-expired-unsaved' // 401 from /predict: the session ended, nothing was saved
+  | 'credentials-too-long' // 413 body_too_large from /auth/*: the name or password is too long
   | 'server' // any other failure
+
+/**
+ * Stable codes the backend adds to some error bodies (ErrorResponse.code). The interface
+ * tells these cases apart by the code; the text of `detail` is only shown.
+ */
+export type ApiErrorCode =
+  | 'database_not_configured' // 503: no DATABASE_URL, so no accounts and no history
+  | 'login_locked' // 429: too many wrong passwords for this name from this address
+  | 'rate_limited' // 429: too many requests from this address in the last minute
+  | 'wrong_password' // 403 from DELETE /auth/me
+  | 'body_too_large' // 413 from /auth/*
 
 export class ApiError extends Error {
   readonly kind: ApiErrorKind
@@ -25,10 +37,12 @@ export class ApiError extends Error {
   readonly detail?: string
   /** Seconds to wait before trying again (Retry-After of a 429), when it was given. */
   readonly retryAfter?: number
+  /** The stable code of the error body, when the backend sent one (any string). */
+  readonly code?: string
 
   constructor(
     kind: ApiErrorKind,
-    options: { status?: number; detail?: string; retryAfter?: number } = {},
+    options: { status?: number; detail?: string; retryAfter?: number; code?: string } = {},
   ) {
     super(options.detail ?? `API error: ${kind}`)
     this.name = 'ApiError'
@@ -36,6 +50,7 @@ export class ApiError extends Error {
     this.status = options.status
     this.detail = options.detail
     this.retryAfter = options.retryAfter
+    this.code = options.code
   }
 }
 
@@ -126,6 +141,11 @@ export function describeError(error: unknown): ErrorDescription {
       return {
         title: 'Неправильний пароль',
         description: 'Обліковий запис не видалено. Перевірте пароль і спробуйте ще раз.',
+      }
+    case 'credentials-too-long':
+      return {
+        title: 'Задовгі дані',
+        description: 'Ім’я користувача — не довше за 32 символи, пароль — не довший за 128.',
       }
     case 'session-expired':
       return { title: 'Сеанс завершився', description: 'Увійдіть знову.' }

@@ -1,4 +1,4 @@
-import { ApiError, type ApiErrorKind } from './errors'
+import { ApiError, type ApiErrorCode, type ApiErrorKind } from './errors'
 import type {
   ClassName,
   HealthResponse,
@@ -38,18 +38,40 @@ function readRetryAfter(response: Response): number | undefined {
 // plain text and status 400, the status /predict uses for a broken image.
 const HOST_REFUSAL = 'Invalid host header'
 
-async function readBody(response: Response): Promise<{ text: string; detail?: string }> {
+interface ErrorBody {
+  text: string
+  detail?: string
+  code?: string
+}
+
+async function readBody(response: Response): Promise<ErrorBody> {
   let text = ''
   try {
     text = await response.text()
     const body: unknown = JSON.parse(text)
     if (body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string') {
-      return { text, detail: body.detail }
+      const code = 'code' in body && typeof body.code === 'string' ? body.code : undefined
+      return { text, detail: body.detail, code }
     }
   } catch {
     // Not JSON (e.g. a proxy error page or the host refusal): there is no detail to show.
   }
   return { text }
+}
+
+/**
+ * Codes that decide the kind, whatever the status map says: two 429s, two 403s and a
+ * 413 mean different things and the text of the server may change.
+ */
+const KIND_BY_CODE: Partial<Record<ApiErrorCode, ApiErrorKind>> = {
+  login_locked: 'login-blocked',
+  rate_limited: 'rate-limited',
+  wrong_password: 'wrong-password',
+  body_too_large: 'credentials-too-long',
+}
+
+function kindOfCode(code: string | undefined): ApiErrorKind | undefined {
+  return code === undefined ? undefined : KIND_BY_CODE[code as ApiErrorCode]
 }
 
 /**
@@ -61,15 +83,10 @@ const PREDICT_KIND_BY_STATUS: KindByStatus = {
   401: 'session-expired-unsaved',
   503: 'busy',
 }
-/** The same answer for an unknown name and a wrong password; 429 after failed attempts. */
-const LOGIN_KIND_BY_STATUS: KindByStatus = {
-  ...KIND_BY_STATUS,
-  401: 'login-failed',
-  429: 'login-blocked',
-}
+/** The same answer for an unknown name and a wrong password. A 429 is told apart by its
+ * code: the lock after failed attempts (login_locked) or the per-minute limit. */
+const LOGIN_KIND_BY_STATUS: KindByStatus = { ...KIND_BY_STATUS, 401: 'login-failed' }
 const REGISTER_KIND_BY_STATUS: KindByStatus = { ...KIND_BY_STATUS, 409: 'username-taken' }
-/** The text DELETE /auth/me sends with its 403 for a wrong password. */
-const WRONG_PASSWORD_DETAIL = 'Неправильний пароль.'
 
 // --- A session that ended -----------------------------------------------------------------
 
@@ -114,16 +131,18 @@ async function send(
   }
 
   if (!response.ok) {
-    const { text, detail } = await readBody(response)
+    const { text, detail, code } = await readBody(response)
     const refusedHost = response.status === 400 && text.trim() === HOST_REFUSAL
-    const kind = refusedHost ? 'host-not-allowed' : (kindByStatus[response.status] ?? 'server')
+    const kind = refusedHost
+      ? 'host-not-allowed'
+      : (kindOfCode(code) ?? kindByStatus[response.status] ?? 'server')
     const retryAfter = response.status === 429 ? readRetryAfter(response) : undefined
     if (response.status === 401 && session !== null) {
       for (const listener of [...sessionListeners]) {
         listener(session)
       }
     }
-    throw new ApiError(kind, { status: response.status, detail, retryAfter })
+    throw new ApiError(kind, { status: response.status, detail, retryAfter, code })
   }
   return response
 }
@@ -221,18 +240,10 @@ export async function logout(): Promise<void> {
   await send('/auth/logout', { method: 'POST' }, { session: null })
 }
 
-/** Delete the account, its sessions and its whole history. */
+/**
+ * Delete the account, its sessions and its whole history. A wrong password is a 403 with
+ * the code wrong_password; any other 403 comes from the Origin checks.
+ */
 export async function deleteAccount(password: string): Promise<void> {
-  try {
-    await send('/auth/me', { method: 'DELETE', ...jsonBody({ password }) })
-  } catch (error) {
-    if (
-      error instanceof ApiError &&
-      error.status === 403 &&
-      error.detail === WRONG_PASSWORD_DETAIL
-    ) {
-      throw new ApiError('wrong-password', { status: 403, detail: error.detail })
-    }
-    throw error
-  }
+  await send('/auth/me', { method: 'DELETE', ...jsonBody({ password }) })
 }
