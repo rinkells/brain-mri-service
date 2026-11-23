@@ -1,12 +1,13 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent, { type UserEvent } from '@testing-library/user-event'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 
 import App from './App'
 import {
   bodyOf,
   bodyTooLarge,
   callsTo,
+  databaseNotConfigured,
   jsonResponse,
   makeFile,
   makePage,
@@ -677,5 +678,23 @@ describe('the fields are no longer than the backend allows', () => {
       'maxlength',
       '128',
     )
+  })
+})
+
+describe('without a database (DATABASE_URL not set)', () => {
+  test('the visitor is a guest at once, and GET /auth/me is not asked again', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const fetchMock = mockApi({ me: databaseNotConfigured })
+
+      render(<App />)
+
+      expect(await within(banner()).findByRole('link', { name: 'Увійти' })).toBeInTheDocument()
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000))
+      expect(callsTo(fetchMock, '/auth/me')).toHaveLength(1)
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

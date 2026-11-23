@@ -38,9 +38,10 @@ const ACCOUNT_DELETED: Notice = {
 
 /**
  * Asks GET /auth/me on load (401: anonymous) and keeps the answer in memory only: nothing
- * goes to localStorage or sessionStorage. Any other failure (429, 503, no connection)
- * says nothing about the session, so the state becomes 'unknown' and the question is
- * asked again later. A 401 from any route that needs a session (reported by the API
+ * goes to localStorage or sessionStorage. A 503 with database_not_configured means there
+ * are no accounts: anonymous, for good. Any other failure (429, 503, no connection) says
+ * nothing about the session, so the state becomes 'unknown' and the question is asked
+ * again later. A 401 from any route that needs a session (reported by the API
  * client) signs the user out here.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -71,6 +72,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         (user) => settle(user ? { status: 'signed-in', user } : { status: 'anonymous' }),
         (error: unknown) => {
           if (controller.signal.aborted || !undecided(authRef.current)) {
+            return
+          }
+          if (error instanceof ApiError && error.code === 'database_not_configured') {
+            // No accounts at all: nothing will change by asking again.
+            settle({ status: 'anonymous' })
             return
           }
           failures += 1
