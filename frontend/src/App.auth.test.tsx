@@ -720,3 +720,29 @@ describe('the note under a result tells why it was not saved', () => {
     expect(screen.queryByRole('link', { name: 'Увійдіть' })).not.toBeInTheDocument()
   })
 })
+
+describe('the end of a session found by the history', () => {
+  test('forgets the last scan and result of the analysis page', async () => {
+    mockApi({
+      me: signedIn(),
+      predict: () => jsonResponse(makePrediction()),
+      predictions: sessionExpired,
+      stats: sessionExpired,
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await within(banner()).findByRole('button', { name: /alice/ })
+    await analyze(user)
+    await screen.findByTestId('predicted-class')
+
+    window.location.hash = '#/history'
+    expect(
+      await screen.findByRole('heading', { name: 'Історія доступна після входу' }),
+    ).toBeInTheDocument()
+    window.location.hash = '#/'
+
+    expect(await screen.findByRole('form', { name: 'Завантаження знімка' })).toBeVisible()
+    expect(screen.queryByTestId('predicted-class')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Проаналізувати' })).toBeDisabled()
+  })
+})

@@ -23,7 +23,8 @@ export interface Notice {
 export interface AuthContextValue {
   auth: AuthState
   notice: Notice | null
-  /** Grows on every sign-out and account deletion: pages keyed by it forget their data. */
+  /** Grows on every sign-out, account deletion and session ended (401 outside /predict):
+   * pages keyed by it forget their data. */
   resetCount: number
   /** After a successful sign-in or registration. */
   signedIn: (user: User) => void

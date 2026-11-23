@@ -108,9 +108,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         authRef.current = { status: 'anonymous' }
         setAuth({ status: 'anonymous' })
-        // /predict explains it next to the scan; anything else gets the notice.
+        // /predict explains it next to the scan, which must stay. Anything else gets the
+        // notice, and the analysis page forgets the user's last scan and result, as at
+        // sign-out: the next person at this browser must not see them.
         if (source !== 'predict') {
           setNotice(SESSION_ENDED)
+          setResetCount((count) => count + 1)
         }
       }),
     [],
