@@ -49,6 +49,11 @@ BAD_USERNAME = (
 BAD_PASSWORD = "Пароль має містити від 10 до 128 символів."
 PASSWORD_IS_USERNAME = "Пароль не може збігатися з іменем користувача."
 
+# The body of a /auth/* request: a name and a password fit many times over. Larger ones
+# get 413 before they are read to the end, let alone parsed (app.main).
+AUTH_MAX_BODY_BYTES = 8 * 1024
+AUTH_BODY_TOO_LARGE = "Тіло запиту до /auth/* завелике: дозволено не більше 8 КіБ."
+
 TOKEN_BYTES = 32
 # What secrets.token_urlsafe(32) gives: 43 characters of unpadded URL-safe base64.
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_\-]{43}")

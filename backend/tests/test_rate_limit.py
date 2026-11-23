@@ -817,6 +817,7 @@ def test_failed_logins_count_by_the_address_the_proxy_names(accounts, limited):
 def test_a_huge_name_does_not_grow_the_table_of_failures(accounts, limited, client):
     clock, model, queue, connect = limited(rate_limit_auth_per_minute=1000)
 
-    assert login(connect(), "x" * 100_000, WRONG).status_code == 401
+    # The longest name that still fits into an 8 KiB body.
+    assert login(connect(), "x" * 7_000, WRONG).status_code == 401
 
     assert all(len(key) < 200 for key in client.app.state.login_failures._hits)

@@ -912,3 +912,59 @@ def test_openapi_documents_the_auth_responses(client):
     assert (password["format"], password["writeOnly"]) == ("password", True)
     assert "401" not in paths["/health"]["get"]["responses"]
     assert "403" not in paths["/health"]["get"]["responses"]
+
+
+# --- Size of /auth/* bodies ------------------------------------------------------------
+
+AUTH_BODY_TOO_LARGE = {"detail": "Тіло запиту до /auth/* завелике: дозволено не більше 8 КіБ."}
+AUTH_BODY_LIMIT = 8 * 1024
+JSON = {"Content-Type": "application/json"}
+
+
+def credentials_body(size: int) -> bytes:
+    """A JSON body of exactly `size` bytes with a well-formed name and a long password."""
+    head, tail = b'{"username": "alice", "password": "', b'"}'
+    return head + b"p" * (size - len(head) - len(tail)) + tail
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("POST", "/auth/register"), ("POST", "/auth/login"), ("DELETE", "/auth/me")],
+)
+def test_an_auth_body_over_8_kib_is_413_before_it_is_parsed(browser, method, path):
+    register(browser)
+    not_even_json = b"{" + b" " * AUTH_BODY_LIMIT
+
+    for body in (credentials_body(AUTH_BODY_LIMIT + 1), not_even_json):
+        response = browser.request(method, path, content=body, headers=JSON)
+        assert response.status_code == 413, (path, len(body))
+        assert response.json() == AUTH_BODY_TOO_LARGE
+        assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("path", ["/auth/register", "/auth/login"])
+def test_a_chunked_auth_body_over_8_kib_is_413_too(browser, path):
+    """Without Content-Length the bytes are counted as they arrive."""
+    chunks = (b"{" + b" " * 1023 for _ in range(9))
+
+    response = browser.post(path, content=chunks, headers=JSON)
+
+    assert response.status_code == 413
+    assert response.json() == AUTH_BODY_TOO_LARGE
+
+
+def test_an_auth_body_of_exactly_8_kib_is_read(app, browser, password_hash, database):
+    add_user(database, "alice", password_hash)
+
+    response = browser.post("/auth/login", content=credentials_body(AUTH_BODY_LIMIT), headers=JSON)
+
+    assert response.status_code == 401
+    assert response.json() == LOGIN_FAILED
+
+
+def test_the_8_kib_limit_is_only_for_auth(app, browser):
+    """A scan may still be as large as MAX_UPLOAD_MB (1 MB in the tests)."""
+    register(browser)
+    scan = {"file": ("scan.png", image_bytes(512, 512) + b"\0" * 64 * 1024, "image/png")}
+
+    assert browser.post("/predict", files=scan).status_code == 200
