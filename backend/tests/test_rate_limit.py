@@ -821,3 +821,22 @@ def test_a_huge_name_does_not_grow_the_table_of_failures(accounts, limited, clie
     assert login(connect(), "x" * 7_000, WRONG).status_code == 401
 
     assert all(len(key) < 200 for key in client.app.state.login_failures._hits)
+
+
+def test_the_table_of_failed_sign_ins_is_bounded_and_evicts_in_constant_time(settings):
+    """The same bound and O(1) eviction as the per-minute limits: names never seen before
+    cannot grow it without end, nor make one sign-in walk the whole table."""
+    clock = FakeClock()
+    limiter = build_login_failures(settings, clock=clock)
+    assert limiter.max_keys == MAX_KEYS
+    for n in range(MAX_KEYS):
+        limiter.hit(f"198.51.100.7 name-{n}")
+    limiter._hits = CountingOrderedDict(limiter._hits)
+
+    for n in range(50):
+        limiter.hit(f"198.51.100.7 new-{n}")
+
+    assert limiter._hits.visits == 0
+    assert len(limiter) == MAX_KEYS
+    assert limiter.tracked("198.51.100.7 name-0") == 0
+    assert limiter.tracked("198.51.100.7 name-50") == 1
