@@ -211,13 +211,15 @@ def test_default_key_cap():
         ("GET", "/docs", "read"),
         ("GET", "/health", None),
         ("HEAD", "/health", None),
-        # Every /auth path, whatever the method, counts against the auth bucket only.
+        # Only signing in and registering share the strict auth bucket. GET /auth/me runs
+        # on every page load, so it is an ordinary read; logout and deletion are writes.
         ("POST", "/auth/register", "auth"),
         ("POST", "/auth/login", "auth"),
-        ("POST", "/auth/logout", "auth"),
-        ("GET", "/auth/me", "auth"),
-        ("DELETE", "/auth/me", "auth"),
-        ("GET", "/auth/no-such-path", "auth"),
+        ("POST", "/auth/logout", "write"),
+        ("GET", "/auth/me", "read"),
+        ("DELETE", "/auth/me", "write"),
+        ("GET", "/auth/login", "read"),
+        ("GET", "/auth/no-such-path", "read"),
         ("GET", "/authors", "read"),
     ],
 )
@@ -684,12 +686,14 @@ def login(client, username="alice", password=TEST_PASSWORD, **headers):
 
 
 def test_auth_requests_have_their_own_bucket(accounts, limited):
-    clock, model, queue, connect = limited(rate_limit_auth_per_minute=3)
+    clock, model, queue, connect = limited(rate_limit_auth_per_minute=2)
     browser = connect(origin=TEST_ORIGIN)
 
     assert login(browser).status_code == 200
+    # Neither of these counts against the auth bucket.
     assert browser.get("/auth/me").status_code == 200
     assert browser.post("/auth/logout").status_code == 204
+    assert login(browser).status_code == 200
     refused = browser.post("/auth/register", json={"username": "bob", "password": TEST_PASSWORD})
 
     assert refused.status_code == 429
@@ -698,7 +702,7 @@ def test_auth_requests_have_their_own_bucket(accounts, limited):
     assert refused.headers["cache-control"] == "no-store"
     # The other buckets are untouched.
     assert post_scan(browser).status_code == 200
-    assert browser.get("/predictions").status_code == 401
+    assert browser.get("/predictions").status_code == 200  # signed in by the second login
     clock.advance(60)
     assert login(browser).status_code == 200
 
@@ -840,3 +844,86 @@ def test_the_table_of_failed_sign_ins_is_bounded_and_evicts_in_constant_time(set
     assert len(limiter) == MAX_KEYS
     assert limiter.tracked("198.51.100.7 name-0") == 0
     assert limiter.tracked("198.51.100.7 name-50") == 1
+
+
+# --- /auth/me is a read, logout and deletion are writes ---------------------------------
+
+
+def register_as(client, username):
+    return client.post("/auth/register", json={"username": username, "password": TEST_PASSWORD})
+
+
+def test_fifteen_page_loads_a_minute_ask_auth_me_without_429(accounts, limited):
+    """Every page load asks GET /auth/me: it must not share the 10 of signing in."""
+    clock, model, queue, connect = limited()  # the default limits
+    browser = connect(origin=TEST_ORIGIN)
+    login(browser)
+
+    answers = [browser.get("/auth/me").status_code for _ in range(15)]
+    anonymous = [connect().get("/auth/me").status_code for _ in range(15)]
+
+    assert answers == [200] * 15
+    assert anonymous == [401] * 15
+
+
+def test_sign_in_and_registration_still_get_429_after_ten(accounts, limited):
+    clock, model, queue, connect = limited()  # RATE_LIMIT_AUTH_PER_MINUTE=10
+    # Different names, so the limit of failed sign-ins per name never applies.
+    attempts = [login(connect(), f"nobody{n}", WRONG).status_code for n in range(5)]
+    attempts += [register_as(connect(), f"new_user{n}").status_code for n in range(5)]
+
+    assert attempts == [401] * 5 + [201] * 5
+    for refused in (login(connect(), "nobody99", WRONG), register_as(connect(), "new_user99")):
+        assert refused.status_code == 429
+        assert refused.json() == {"detail": "Забагато запитів. Спробуйте ще раз через 60 с."}
+        assert refused.headers["Retry-After"] == "60"
+
+
+def test_after_a_429_on_sign_in_auth_me_still_answers(accounts, limited):
+    clock, model, queue, connect = limited()
+    browser = connect(origin=TEST_ORIGIN)
+    assert login(browser).status_code == 200
+    for n in range(9):
+        login(connect(), f"nobody{n}", WRONG)
+    assert login(connect()).status_code == 429
+
+    assert browser.get("/auth/me").status_code == 200
+    assert connect().get("/auth/me").status_code == 401
+
+
+def test_logout_and_account_deletion_count_as_writes(accounts, limited):
+    clock, model, queue, connect = limited(
+        rate_limit_write_per_minute=2, rate_limit_auth_per_minute=3
+    )
+    browser = connect(origin=TEST_ORIGIN)
+    login(browser)
+
+    assert browser.post("/auth/logout").status_code == 204
+    assert browser.post("/auth/logout").status_code == 204
+    refused = browser.request("DELETE", "/auth/me", json={"password": TEST_PASSWORD})
+
+    assert refused.status_code == 429
+    assert refused.json() == {"detail": "Забагато запитів. Спробуйте ще раз через 60 с."}
+    # The auth bucket is untouched by them: the first sign-in is its only request so far.
+    assert login(connect()).status_code == 200
+    assert login(connect()).status_code == 200
+    assert login(connect()).status_code == 429
+
+
+def test_the_api_description_names_the_limit_of_each_auth_route(client):
+    paths = client.get("/openapi.json").json()["paths"]
+
+    def limit_of(path, method):
+        return paths[path][method]["responses"]["429"]["description"]
+
+    for path in ("/auth/login", "/auth/register"):
+        assert "RATE_LIMIT_AUTH_PER_MINUTE" in limit_of(path, "post"), path
+    assert "RATE_LIMIT_READ_PER_MINUTE" in limit_of("/auth/me", "get")
+    assert "RATE_LIMIT_AUTH_PER_MINUTE" not in limit_of("/auth/me", "get")
+    for path, method in (("/auth/logout", "post"), ("/auth/me", "delete")):
+        assert "RATE_LIMIT_WRITE_PER_MINUTE" in limit_of(path, method), path
+    # Wrong passwords have their own limit where a password is checked.
+    for path, method in (("/auth/login", "post"), ("/auth/me", "delete")):
+        assert "LOGIN_FAILURES_" in limit_of(path, method), path
+    for path, method in (("/auth/register", "post"), ("/auth/me", "get"), ("/auth/logout", "post")):
+        assert "LOGIN_FAILURES_" not in limit_of(path, method), path

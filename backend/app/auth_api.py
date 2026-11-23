@@ -33,7 +33,7 @@ from app.auth import (
 from app.database import Database
 from app.history_api import HISTORY_DISABLED, UNAVAILABLE_RESPONSE
 from app.rate_limit import (
-    RATE_LIMITED_RESPONSE,
+    rate_limited_response,
     SlidingWindowLimiter,
     login_failure_key,
     rate_limit_key,
@@ -76,7 +76,8 @@ INVALID_PASSWORD_BODY_RESPONSE = {
     422: {"model": ErrorResponse, "description": "Тіло не є JSON-об'єктом із текстовим password"}
 }
 
-router = APIRouter(prefix="/auth", tags=["auth"], responses=RATE_LIMITED_RESPONSE)
+# Each route names the limit it counts against (app.rate_limit.bucket_of).
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 async def body_validation_error_handler(
@@ -150,6 +151,7 @@ async def begin_session(request: Request, response: Response, user: SessionUser)
         **BODY_TOO_LARGE_RESPONSE,
         **FORBIDDEN_WRITE_RESPONSE,
         **UNAVAILABLE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_AUTH_PER_MINUTE"),
         409: {"model": ErrorResponse, "description": "Ім'я вже зайняте (без урахування регістру)"},
     },
     summary="Зареєструватися (й одразу увійти)",
@@ -182,6 +184,7 @@ async def register(request: Request, response: Response, body: CredentialsReques
         **BODY_TOO_LARGE_RESPONSE,
         **FORBIDDEN_WRITE_RESPONSE,
         **UNAVAILABLE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_AUTH_PER_MINUTE", wrong_passwords=True),
         401: {
             "model": ErrorResponse,
             "description": "Неправильне ім'я або пароль (одна відповідь на обидва випадки)",
@@ -215,7 +218,10 @@ async def login(request: Request, response: Response, body: CredentialsRequest) 
     "/logout",
     status_code=204,
     response_class=Response,
-    responses=FORBIDDEN_WRITE_RESPONSE,
+    responses={
+        **FORBIDDEN_WRITE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_WRITE_PER_MINUTE"),
+    },
     summary="Вийти",
 )
 async def logout(request: Request) -> Response:
@@ -233,7 +239,12 @@ async def logout(request: Request) -> Response:
 @router.get(
     "/me",
     response_model=UserResponse,
-    responses={**UNAUTHORIZED_RESPONSE, **FORBIDDEN_READ_RESPONSE, **UNAVAILABLE_RESPONSE},
+    responses={
+        **UNAUTHORIZED_RESPONSE,
+        **FORBIDDEN_READ_RESPONSE,
+        **UNAVAILABLE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_READ_PER_MINUTE"),
+    },
     summary="Поточний користувач",
 )
 async def me(user: CurrentUser) -> UserResponse:
@@ -249,6 +260,7 @@ async def me(user: CurrentUser) -> UserResponse:
         **INVALID_PASSWORD_BODY_RESPONSE,
         **BODY_TOO_LARGE_RESPONSE,
         **UNAVAILABLE_RESPONSE,
+        **rate_limited_response("RATE_LIMIT_WRITE_PER_MINUTE", wrong_passwords=True),
         403: {
             "model": ErrorResponse,
             "description": (

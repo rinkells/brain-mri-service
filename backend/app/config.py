@@ -124,9 +124,10 @@ class Settings(BaseSettings):
     )
     # Serve Swagger UI (/docs), ReDoc (/redoc) and the schema (/openapi.json).
     enable_docs: bool = True
-    # Requests per client in any 60 s: POST /predict, other writes (DELETE), reads (GET),
-    # and every request to /auth/*. Above the limit the API answers 429 with Retry-After;
-    # /health is never limited.
+    # Requests per client in any 60 s: POST /predict, other writes (DELETE, POST
+    # /auth/logout), reads (GET, GET /auth/me), and signing in or registering (POST
+    # /auth/login and /auth/register). Above the limit the API answers 429 with
+    # Retry-After; /health is never limited.
     rate_limit_enabled: bool = True
     rate_limit_predict_per_minute: int = Field(default=10, gt=0)
     rate_limit_write_per_minute: int = Field(default=30, gt=0)
