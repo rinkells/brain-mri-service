@@ -24,6 +24,7 @@ export default defineConfig({
       '/predict': BACKEND_URL,
       '/predictions': BACKEND_URL,
       '/stats': BACKEND_URL,
+      '/auth': BACKEND_URL,
     },
   },
   test: {

@@ -197,8 +197,10 @@ def test_nginx_proxies_the_api_paths_of_the_ui_and_nothing_else():
     ui_paths = set(VITE_PROXY_KEY.findall(vite))
     proxied = {path for path, body in NGINX_LOCATION.findall(nginx_conf()) if "proxy_pass" in body}
 
-    assert ui_paths == {"/health", "/predict", "/predictions", "/stats"}
-    assert proxied == ui_paths | {"/predictions/"}
+    assert ui_paths == {"/health", "/predict", "/predictions", "/stats", "/auth"}
+    # Vite matches keys as prefixes; nginx needs /predictions/ besides /predictions, and
+    # takes everything under /auth/ (the API has no /auth path of its own).
+    assert proxied == (ui_paths - {"/auth"}) | {"/predictions/", "/auth/"}
     for path in ("/docs", "/redoc", "/openapi.json"):
         assert path not in nginx_conf()
 
