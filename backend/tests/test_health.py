@@ -20,7 +20,7 @@ from sqlalchemy.pool import NullPool
 from app.database import DISPOSE_TIMEOUT_S, PROBE_CONNECT_TIMEOUT_S, Database
 from app.main import create_app
 from app.rate_limit import bucket_of
-from app.readiness import CHECK_THREAD_NAME, DatabaseProbe
+from app.readiness import CHECK_THREAD_NAME, RESULT_TTL_S, DatabaseProbe
 from tests.helpers import new_browser
 from tests.test_rate_limit import limited  # noqa: F401  (fixture)
 
@@ -568,6 +568,46 @@ def test_requests_waiting_for_a_stuck_check_add_no_callbacks_to_it():
 
     assert engine.connects == 1
     assert callbacks <= 1
+
+
+class UnprintableError(Exception):
+    """An exception whose message cannot even be built."""
+
+    def __str__(self) -> str:
+        raise RuntimeError("no message")
+
+
+class Abort(BaseException):
+    """Not an Exception: escapes `except Exception`."""
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+@pytest.mark.parametrize(
+    "error", [UnprintableError(), Abort()], ids=["unprintable-error", "base-exception"]
+)
+def test_a_check_that_fails_oddly_still_ends_and_lets_the_next_one_start(
+    use_database, replace_state, error
+):
+    """Whatever escapes the driver, the check's future ends (False), or no check would
+    ever start again and readiness would stay 503 until a restart."""
+    before = set(live_checks())
+    clock = FakeClock()
+    engine = FailingEngine(error)
+    probe = DatabaseProbe(timeout_s=0.5, clock=clock)
+    replace_state("readiness", probe)
+    client = use_database(Database(engine))
+    try:
+        assert client.get("/health/ready").json() == DATABASE_DOWN
+        first = probe._current
+        assert wait_until(first.future.done)
+        assert first.future.result() is False
+
+        clock.advance(RESULT_TTL_S)
+        assert client.get("/health/ready").json() == DATABASE_DOWN
+        assert engine.connects == 2
+    finally:
+        assert wait_until(lambda: not live_checks(before))
+        probe.close()
 
 
 def test_close_does_not_wait_for_a_stuck_check(use_database, replace_state):

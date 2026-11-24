@@ -23,6 +23,15 @@ RESULT_TTL_S = 2.0
 CHECK_THREAD_NAME = "readiness-check"
 
 
+def _describe(exc: BaseException) -> str:
+    """The exception's type and message, or only its type when the message itself
+    cannot be built."""
+    try:
+        return f"{type(exc).__name__}: {exc}"
+    except Exception:
+        return type(exc).__name__
+
+
 class _Check:
     """One run of SELECT 1, in a daemon thread of its own."""
 
@@ -122,20 +131,22 @@ class DatabaseProbe:
         return check
 
     def _run(self, check: _Check) -> None:
+        reachable = False
         try:
-            with check.database.probe_engine.connect() as connection:
-                connection.execute(text("SELECT 1"))
-        except Exception as exc:  # any failure means "not ready", whatever its kind
-            reachable, reason = False, f"{type(exc).__name__}: {exc}"
-        else:
-            reachable, reason = True, ""
-        try:
-            self._record(check.database, reachable, reason)
+            try:
+                with check.database.probe_engine.connect() as connection:
+                    connection.execute(text("SELECT 1"))
+            except Exception as exc:  # any failure means "not ready", whatever its kind
+                self._record(check.database, False, _describe(exc))
+            else:
+                reachable = True
+                self._record(check.database, True)
         finally:
-            # Always, or the next check would never start.
+            # Always, whatever escaped above (a BaseException too), or no check would
+            # ever start again.
             check.future.set_result(reachable)
 
-    def _record(self, database: Database, reachable: bool, reason: str) -> None:
+    def _record(self, database: Database, reachable: bool, reason: str = "") -> None:
         with self._lock:
             previous = self._reachable
             self._reachable = reachable
