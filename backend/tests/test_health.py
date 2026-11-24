@@ -4,6 +4,7 @@
 loaded and the database answers SELECT 1, and is what the Compose healthcheck of api asks.
 """
 
+import asyncio
 import logging
 import secrets
 import socket
@@ -16,7 +17,7 @@ from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
 
-from app.database import PROBE_CONNECT_TIMEOUT_S, Database
+from app.database import DISPOSE_TIMEOUT_S, PROBE_CONNECT_TIMEOUT_S, Database
 from app.main import create_app
 from app.rate_limit import bucket_of
 from app.readiness import CHECK_THREAD_NAME, DatabaseProbe
@@ -54,11 +55,12 @@ class FailingEngine:
 
 class StalledEngine:
     """An engine whose connect() hangs until released, like a database that never answers
-    or a check stuck in name resolution."""
+    or a check stuck in name resolution; with stall_dispose, dispose() hangs too."""
 
-    def __init__(self) -> None:
+    def __init__(self, stall_dispose: bool = False) -> None:
         self.release = threading.Event()
         self.connects = 0
+        self.stall_dispose = stall_dispose
 
     def connect(self):
         self.connects += 1
@@ -66,7 +68,8 @@ class StalledEngine:
         raise OperationalError("SELECT 1", {}, Exception("timed out"))
 
     def dispose(self) -> None:
-        pass
+        if self.stall_dispose:
+            self.release.wait(timeout=30)
 
 
 @pytest.fixture
@@ -532,6 +535,48 @@ def test_close_does_not_wait_for_a_stuck_check(use_database, replace_state):
         assert engine.connects == 1
     finally:
         engine.release.set()
+
+
+def test_shutdown_with_a_stuck_check_does_not_block_the_event_loop(settings, tmp_path):
+    """The lifespan neither waits for a stuck check nor closes the engines in the event
+    loop: it disposes of them in a thread of its own, waiting DISPOSE_TIMEOUT_S at most,
+    while the loop keeps running other tasks."""
+    app = create_app(
+        settings.model_copy(update={"database_url": f"sqlite:///{tmp_path / 'history.db'}"})
+    )
+    stalled = StalledEngine(stall_dispose=True)
+
+    async def shut_down_while_ticking() -> tuple[float, float]:
+        gaps = []
+
+        async def tick() -> None:
+            last = time.perf_counter()
+            while True:
+                await asyncio.sleep(0.01)
+                now = time.perf_counter()
+                gaps.append(now - last)
+                last = now
+
+        async with app.router.lifespan_context(app):
+            app.state.readiness = DatabaseProbe(timeout_s=0.05)
+            app.state.database.probe_engine = stalled
+            assert await app.state.readiness.reachable(app.state.database) is False
+            ticker = asyncio.create_task(tick())
+            await asyncio.sleep(0.05)
+            started = time.perf_counter()
+        took = time.perf_counter() - started
+        # One more tick, so a gap that lasted until now is recorded too.
+        await asyncio.sleep(0.03)
+        ticker.cancel()
+        return max(gaps), took
+
+    try:
+        longest_gap, took = asyncio.run(shut_down_while_ticking())
+    finally:
+        stalled.release.set()
+
+    assert longest_gap < 0.2
+    assert took < DISPOSE_TIMEOUT_S + 0.5
 
 
 def test_shutdown_closes_the_probe_and_both_engines(settings, tmp_path, monkeypatch):
