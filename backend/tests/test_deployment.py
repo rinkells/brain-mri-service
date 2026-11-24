@@ -236,7 +236,12 @@ def test_nginx_lets_a_slightly_too_large_upload_reach_the_api():
     max_upload_mb = Settings.model_fields["max_upload_mb"].default
 
     assert size, "no client_max_body_size in megabytes"
-    assert max_upload_mb + 1 <= int(size.group(1)) <= max_upload_mb + 5
+    assert max_upload_mb + 1 <= int(size.group(1)) <= max_upload_mb + 5, (
+        f"client_max_body_size {size.group(1)}m in frontend/nginx.conf must be 1-5 MB above "
+        f"MAX_UPLOAD_MB ({max_upload_mb:g}). nginx does not read .env: change it together with "
+        "the default MAX_UPLOAD_MB (app/config.py, .env.example, docker-compose.yml) and "
+        "rebuild the frontend service"
+    )
 
 
 def test_nginx_waits_long_enough_for_an_inference():
