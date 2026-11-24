@@ -17,6 +17,23 @@ class HealthResponse(BaseModel):
     model_version: str = Field(description="Версія моделі (MODEL_VERSION)")
 
 
+class ReadinessResponse(BaseModel):
+    status: Literal["ready", "not_ready"] = Field(
+        description=(
+            "ready, коли модель завантажена, а база (якщо вона використовується) відповідає; "
+            "інакше not_ready"
+        )
+    )
+    model: bool = Field(description="Модель завантажена")
+    database: bool | None = Field(
+        description=(
+            "true — база відповіла на SELECT 1 за 2 с; false — DATABASE_URL задано, але база "
+            "не відповіла; null — база не використовується (DATABASE_URL не задано), тож від "
+            "неї готовність не залежить"
+        )
+    )
+
+
 class ImageSize(BaseModel):
     width: int
     height: int

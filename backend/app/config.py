@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     # Requests per client in any 60 s: POST /predict, other writes (DELETE, POST
     # /auth/logout), reads (GET, GET /auth/me), and signing in or registering (POST
     # /auth/login and /auth/register). Above the limit the API answers 429 with
-    # Retry-After; /health is never limited.
+    # Retry-After; /health and /health/ready are never limited.
     rate_limit_enabled: bool = True
     rate_limit_predict_per_minute: int = Field(default=10, gt=0)
     rate_limit_write_per_minute: int = Field(default=30, gt=0)

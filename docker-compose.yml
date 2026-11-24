@@ -46,6 +46,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Readiness, not liveness: healthy only while the model is loaded and Postgres answers
+    # SELECT 1 (GET /health/ready answers 503 otherwise, after at most 2 s). frontend waits
+    # for this. It replaces the HEALTHCHECK of the image, which asks /health (liveness).
+    # An unhealthy api is not restarted: it recovers by itself once the database is back.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      # Migrations and loading torch and the weights come first.
+      start_period: 60s
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       MODEL_PATH: /srv/models/resnet18_v2c_best.pt

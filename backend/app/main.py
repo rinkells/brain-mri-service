@@ -1,4 +1,4 @@
-"""FastAPI application: health check, prediction and prediction history."""
+"""FastAPI application: health checks, prediction and prediction history."""
 
 import logging
 import time
@@ -63,6 +63,7 @@ from app.preprocessing import (
     UnsupportedFormatError,
     decode_upload,
 )
+from app.readiness import DatabaseProbe
 from app.records import PredictionRecord
 from app.schemas import (
     ErrorResponse,
@@ -70,10 +71,14 @@ from app.schemas import (
     ImageSize,
     PredictionResponse,
     PredictionWarning,
+    ReadinessResponse,
 )
 from app.security import (
     AUTH_PREFIX,
     FORBIDDEN_WRITE_RESPONSE,
+    HEALTH_PATH,
+    NO_STORE,
+    READY_PATH,
     CrossSiteCheckMiddleware,
     OriginCheckMiddleware,
     SecurityHeadersMiddleware,
@@ -218,8 +223,30 @@ def confidence_warning(probability: float, threshold: float) -> PredictionWarnin
     )
 
 
+HEALTH_DESCRIPTION = (
+    "Liveness: процес працює й відповідає. Базу не опитує, тож відповідає 200, навіть коли "
+    "Postgres недоступний; заодно повертає пристрій, класи й версію моделі для інтерфейсу. "
+    "Не обмежується лімітом, не потребує сесії й не відхиляється перевіркою запитів зі "
+    "сторінок інших сайтів. Готовність до роботи перевіряє GET /health/ready."
+)
+READY_DESCRIPTION = (
+    "Readiness: сервіс готовий до повної роботи — модель завантажена, а база відповіла на "
+    "SELECT 1 не довше ніж за 2 с. Без DATABASE_URL база не використовується й не "
+    "перевіряється: database=null, і готовність залежить лише від моделі. Тоді 200 і "
+    "status=ready, інакше 503 і status=not_ready; поля model і database кажуть, що саме не "
+    "готове, без тексту помилки. Цим шляхом перевіряє стан сервісу api Docker "
+    "Compose. Не обмежується лімітом, не потребує сесії, не відхиляється перевіркою "
+    "запитів зі сторінок інших сайтів і не кешується (Cache-Control: no-store)."
+)
+
+
 # async: answered in the event loop, so it never waits for a worker thread busy with a scan.
-@router.get("/health", response_model=HealthResponse, summary="Стан сервісу")
+@router.get(
+    HEALTH_PATH,
+    response_model=HealthResponse,
+    summary="Стан процесу (liveness)",
+    description=HEALTH_DESCRIPTION,
+)
 async def health(request: Request) -> HealthResponse:
     settings: Settings = request.app.state.settings
     classifier: BrainMRIClassifier = request.app.state.classifier
@@ -228,6 +255,46 @@ async def health(request: Request) -> HealthResponse:
         device=str(classifier.device),
         classes=list(CLASS_NAMES),
         model_version=settings.model_version,
+    )
+
+
+@router.get(
+    READY_PATH,
+    response_model=ReadinessResponse,
+    summary="Готовність до роботи (readiness)",
+    description=READY_DESCRIPTION,
+    responses={
+        200: {
+            "description": (
+                "Модель завантажена, а база відповідає (або не використовується: database=null)"
+            )
+        },
+        503: {
+            "model": ReadinessResponse,
+            "description": "Модель не завантажена або задана база не відповіла за 2 с",
+        },
+    },
+)
+async def ready(request: Request) -> JSONResponse:
+    state = request.app.state
+    model = getattr(state, "classifier", None) is not None
+    database: Database | None = getattr(state, "database", None)
+    # Without DATABASE_URL the service runs without a database by design: it is not a
+    # dependency, so it is not checked (null). Otherwise SELECT 1 runs in a thread of the
+    # probe, never in the event loop.
+    database_ok: bool | None = None
+    if database is not None:
+        probe: DatabaseProbe = state.readiness
+        database_ok = await probe.reachable(database)
+    body = ReadinessResponse(
+        status="ready" if model and database_ok is not False else "not_ready",
+        model=model,
+        database=database_ok,
+    )
+    return JSONResponse(
+        body.model_dump(),
+        status_code=200 if body.status == "ready" else 503,
+        headers=NO_STORE,
     )
 
 
@@ -388,6 +455,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
         # The database is not contacted here: predictions must work even while it is down.
+        # GET /health/ready asks it, through a probe with a thread of its own.
+        app.state.readiness = DatabaseProbe()
         app.state.database = None
         if settings.database_url:
             app.state.database = Database.from_url(settings.database_url)
@@ -398,6 +467,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            app.state.readiness.close()
             if app.state.database is not None:
                 app.state.database.dispose()
 

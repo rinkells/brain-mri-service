@@ -5,10 +5,18 @@ from contextlib import contextmanager
 
 from sqlalchemy import Engine, MetaData, create_engine, event, make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 # Fail fast when Postgres is unreachable: a prediction waits for the save.
 POSTGRES_CONNECT_TIMEOUT_S = 3
+
+# The readiness check (GET /health/ready) opens a connection of its own for each check,
+# with a limit on every stage; see app.readiness for how they add up.
+PROBE_CONNECT_TIMEOUT_S = 2  # TCP connection, startup and authentication (2 s is the minimum)
+PROBE_STATEMENT_TIMEOUT_MS = 1000  # SELECT 1, enforced by the server
+PROBE_TCP_USER_TIMEOUT_MS = 2000  # sent data left unacknowledged: a dropped network
+# How its connections show in pg_stat_activity.
+PROBE_APPLICATION_NAME = "brain-mri-readiness"
 
 # Stable constraint and index names, so Alembic migrations stay predictable.
 NAMING_CONVENTION = {
@@ -57,9 +65,40 @@ def create_db_engine(url: str) -> Engine:
     )
 
 
+def create_probe_engine(url: str) -> Engine:
+    """An engine for the readiness check only: outside the shared pool, so a pool that
+    predictions and the history have filled never keeps the check waiting.
+
+    NullPool: every check opens a new connection and closes it afterwards, so it never
+    meets a pooled connection that died while idle, and each stage has a time limit.
+    """
+    parsed = make_url(url)
+    if parsed.get_backend_name() == "sqlite":
+        return create_engine(
+            parsed,
+            poolclass=NullPool,
+            connect_args={"check_same_thread": False},
+            hide_parameters=True,
+        )
+    return create_engine(
+        parsed,
+        poolclass=NullPool,
+        hide_parameters=True,
+        connect_args={
+            "connect_timeout": PROBE_CONNECT_TIMEOUT_S,
+            "options": f"-c statement_timeout={PROBE_STATEMENT_TIMEOUT_MS}",
+            "tcp_user_timeout": PROBE_TCP_USER_TIMEOUT_MS,
+            "application_name": PROBE_APPLICATION_NAME,
+        },
+    )
+
+
 class Database:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, probe_engine: Engine | None = None) -> None:
         self.engine = engine
+        # What GET /health/ready connects with (see create_probe_engine). Without one, as
+        # with the stand-in engines of tests, the check uses the engine itself.
+        self.probe_engine = probe_engine if probe_engine is not None else engine
         self._sessions = sessionmaker(engine, expire_on_commit=False)
         # time.monotonic() value until which saving is skipped after a failure
         # (see app.history.save_prediction).
@@ -67,7 +106,7 @@ class Database:
 
     @classmethod
     def from_url(cls, url: str) -> "Database":
-        return cls(create_db_engine(url))
+        return cls(create_db_engine(url), create_probe_engine(url))
 
     @contextmanager
     def session(self) -> Iterator[Session]:
@@ -76,3 +115,5 @@ class Database:
 
     def dispose(self) -> None:
         self.engine.dispose()
+        if self.probe_engine is not self.engine:
+            self.probe_engine.dispose()
