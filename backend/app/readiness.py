@@ -60,8 +60,9 @@ class DatabaseProbe:
     history share, so a full pool does not make a healthy database look down. The driver
     bounds each stage on its own (see create_probe_engine): connect_timeout (2 s) the
     connection, statement_timeout (1 s) SELECT 1 on a server that works,
-    tcp_user_timeout (2 s) data the network stops acknowledging, TCP keepalive (about
-    5 s) an answer lost to a network that went away after acknowledging SELECT 1.
+    tcp_user_timeout (2 s) data the network stops acknowledging, and TCP keepalive,
+    cut short by tcp_user_timeout to about 3 s, an answer lost to a network that went
+    away after acknowledging SELECT 1.
 
     A request waits up to timeout_s (2 s) for the check and gets False when it runs
     out; the check goes on. While a check is alive no other starts, however long it

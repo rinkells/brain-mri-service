@@ -22,7 +22,9 @@ PROBE_CONNECT_TIMEOUT_S = 2  # TCP connection, startup and authentication (2 s i
 PROBE_STATEMENT_TIMEOUT_MS = 1000  # SELECT 1, enforced by the server
 PROBE_TCP_USER_TIMEOUT_MS = 2000  # sent data left unacknowledged: a dropped network
 # SELECT 1 acknowledged, but the answer never comes because the network went away for
-# long: TCP keepalive gives up after about 2 + 3 × 1 s instead of the OS default (~2 h).
+# long: TCP keepalive gives up instead of the OS default (~2 h). On Linux
+# tcp_user_timeout (2 s) decides when: the connection is dropped at the first probe
+# sent after 2 s without an answer, about 3 s in all, so the count does not come into it.
 PROBE_KEEPALIVES_IDLE_S = 2
 PROBE_KEEPALIVES_INTERVAL_S = 1
 PROBE_KEEPALIVES_COUNT = 3
