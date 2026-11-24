@@ -629,6 +629,39 @@ def test_a_check_that_ends_after_close_writes_nothing_to_the_log(
     assert readiness_lines(caplog) == []
 
 
+def test_a_check_for_another_database_neither_answers_nor_records(
+    use_database, replace_state, caplog
+):
+    """A request for another database than the live check's gets False at once, and
+    that check's result, when it comes, changes neither the state nor the log."""
+    before = set(live_checks())
+    old = StalledEngine()
+    new = AnsweringEngine()
+    probe = DatabaseProbe(timeout_s=1.0)
+    replace_state("readiness", probe)
+    client = use_database(Database(old))
+    try:
+        client.get("/health/ready")
+        use_database(Database(new))
+
+        started = time.perf_counter()
+        assert client.get("/health/ready").json() == DATABASE_DOWN
+        assert time.perf_counter() - started < 0.5
+        assert new.connects == 0
+
+        old.release.set()
+        assert wait_until(lambda: not live_checks(before))
+        assert probe.last_result() is None
+        assert readiness_lines(caplog) == []
+
+        assert client.get("/health/ready").json() == READY
+        assert new.connects == 1
+    finally:
+        old.release.set()
+        assert wait_until(lambda: not live_checks(before))
+        probe.close()
+
+
 def test_close_does_not_wait_for_a_stuck_check(use_database, replace_state):
     before = set(live_checks())
     engine = StalledEngine()

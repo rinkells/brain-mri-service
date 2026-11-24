@@ -82,6 +82,8 @@ class DatabaseProbe:
         self._clock = clock
         self._lock = threading.Lock()
         self._current: _Check | None = None
+        # The database the requests ask about: the latest one.
+        self._database: Database | None = None
         # The database, the result and when the check that gave it ended.
         self._last: tuple[Database, bool, float] | None = None
         self._reachable: bool | None = None
@@ -95,12 +97,17 @@ class DatabaseProbe:
         with self._lock:
             if self._closed:
                 return False
+            self._database = database
             last = self._last
             if last is not None and last[0] is database and self._clock() - last[2] < self.ttl_s:
                 return last[1]
             check = self._current
             if check is None or check.future.done():
                 check = self._current = self._start(database)
+            elif check.database is not database:
+                # Still running for another database (only when tests swap it): it says
+                # nothing about this one, and no second check starts while it is alive.
+                return False
         # The API has one event loop; another one (tests with a loop of their own) cannot
         # wait for this loop's wrapper and gets one of its own.
         if check.loop is asyncio.get_running_loop():
@@ -110,12 +117,9 @@ class DatabaseProbe:
         try:
             # shield: a request that gives up cancels only its own wait, whose callback
             # on the waiter is removed with it.
-            result = await asyncio.wait_for(asyncio.shield(waiter), self.timeout_s)
+            return await asyncio.wait_for(asyncio.shield(waiter), self.timeout_s)
         except TimeoutError:
             return False
-        # A check still running for another database (only when tests swap it) says
-        # nothing about this one.
-        return result and check.database is database
 
     def close(self) -> None:
         """Start no more checks and write no more to the log. A running check is not
@@ -138,20 +142,23 @@ class DatabaseProbe:
                 with check.database.probe_engine.connect() as connection:
                     connection.execute(text("SELECT 1"))
             except Exception as exc:  # any failure means "not ready", whatever its kind
-                self._record(check.database, False, _describe(exc))
+                self._record(check, False, _describe(exc))
             else:
                 reachable = True
-                self._record(check.database, True)
+                self._record(check, True)
         finally:
             # Always, whatever escaped above (a BaseException too), or no check would
             # ever start again.
             check.future.set_result(reachable)
 
-    def _record(self, database: Database, reachable: bool, reason: str = "") -> None:
+    def _record(self, check: _Check, reachable: bool, reason: str = "") -> None:
         with self._lock:
+            if check.database is not self._database:
+                # The requests have moved on to another database.
+                return
             previous = self._reachable
             self._reachable = reachable
-            self._last = (database, reachable, self._clock())
+            self._last = (check.database, reachable, self._clock())
             if self._closed:
                 # The process may be exiting: a daemon thread writing to stderr while
                 # the interpreter finalizes can abort it.
