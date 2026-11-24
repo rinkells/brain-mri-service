@@ -60,6 +60,27 @@ def test_api_container_is_limited(services):
     assert api["security_opt"] == ["no-new-privileges:true"]
 
 
+# PyTorch takes its thread count from the host's cores, not from the cpus quota of the
+# container. Measured with MAX_CONCURRENT_INFERENCES=2 on cpus: 2 (see README).
+TORCH_THREADS_DEFAULT = "1"
+TORCH_THREAD_VARIABLES = ("OMP_NUM_THREADS", "MKL_NUM_THREADS")
+
+
+def test_api_limits_the_threads_of_pytorch(services):
+    environment = services["api"]["environment"]
+
+    for name in TORCH_THREAD_VARIABLES:
+        assert environment.get(name) == TORCH_THREADS_DEFAULT, name
+
+
+def test_compose_falls_back_to_the_default_torch_threads():
+    """Both variables follow TORCH_THREADS from .env, with the same default."""
+    text = (REPO_DIR / "docker-compose.yml").read_text(encoding="utf-8")
+
+    for name in TORCH_THREAD_VARIABLES:
+        assert f"{name}: ${{TORCH_THREADS:-{TORCH_THREADS_DEFAULT}}}" in text, name
+
+
 def test_database_container_has_memory_and_process_limits_only(services):
     db = services["db"]
 

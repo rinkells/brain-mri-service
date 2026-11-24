@@ -62,6 +62,10 @@ services:
       MODEL_PATH: /srv/models/resnet18_v2c_best.pt
       MODEL_VERSION: resnet18_v2c
       DEVICE: ${DEVICE:-cpu}
+      # Threads per prediction. PyTorch otherwise takes the host's cores, not the
+      # cpus: 2 quota above, so two predictions at once oversubscribe the quota.
+      OMP_NUM_THREADS: ${TORCH_THREADS:-1}
+      MKL_NUM_THREADS: ${TORCH_THREADS:-1}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
       MAX_PIXELS: ${MAX_PIXELS:-16777216}
       MAX_IMAGE_SIDE: ${MAX_IMAGE_SIDE:-4096}
