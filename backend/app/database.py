@@ -18,6 +18,11 @@ POSTGRES_CONNECT_TIMEOUT_S = 3
 PROBE_CONNECT_TIMEOUT_S = 2  # TCP connection, startup and authentication (2 s is the minimum)
 PROBE_STATEMENT_TIMEOUT_MS = 1000  # SELECT 1, enforced by the server
 PROBE_TCP_USER_TIMEOUT_MS = 2000  # sent data left unacknowledged: a dropped network
+# SELECT 1 acknowledged, but the answer never comes because the network went away for
+# long: TCP keepalive gives up after about 2 + 3 × 1 s instead of the OS default (~2 h).
+PROBE_KEEPALIVES_IDLE_S = 2
+PROBE_KEEPALIVES_INTERVAL_S = 1
+PROBE_KEEPALIVES_COUNT = 3
 # How its connections show in pg_stat_activity.
 PROBE_APPLICATION_NAME = "brain-mri-readiness"
 # How long shutdown waits for the engines to close (see Database.dispose_off_loop).
@@ -93,6 +98,10 @@ def create_probe_engine(url: str) -> Engine:
             "connect_timeout": PROBE_CONNECT_TIMEOUT_S,
             "options": f"-c statement_timeout={PROBE_STATEMENT_TIMEOUT_MS}",
             "tcp_user_timeout": PROBE_TCP_USER_TIMEOUT_MS,
+            "keepalives": 1,
+            "keepalives_idle": PROBE_KEEPALIVES_IDLE_S,
+            "keepalives_interval": PROBE_KEEPALIVES_INTERVAL_S,
+            "keepalives_count": PROBE_KEEPALIVES_COUNT,
             "application_name": PROBE_APPLICATION_NAME,
         },
     )

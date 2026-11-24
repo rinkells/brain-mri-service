@@ -370,6 +370,13 @@ def test_postgres_checks_open_a_new_connection_with_a_limit_on_every_stage():
     assert "-c statement_timeout=1000" in seen["options"]
     assert seen["tcp_user_timeout"] == 2000
     assert seen["application_name"] == "brain-mri-readiness"
+    # A SELECT 1 the server acknowledged but never answered, because the network went
+    # away for long: keepalive probes give up on it after about 2 + 3 × 1 s, instead of
+    # the OS default of about 2 hours.
+    assert seen["keepalives"] == 1
+    assert seen["keepalives_idle"] == 2
+    assert seen["keepalives_interval"] == 1
+    assert seen["keepalives_count"] == 3
 
 
 @pytest.fixture
