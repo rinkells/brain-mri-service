@@ -544,6 +544,32 @@ def test_a_stuck_check_is_the_only_one_until_it_ends(use_database, replace_state
         probe.close()
 
 
+def test_requests_waiting_for_a_stuck_check_add_no_callbacks_to_it():
+    """Requests wait for one asyncio wrapper made when the check started, not each for a
+    wrapper of its own: those would leave a callback on the check's future per request
+    for as long as it hangs."""
+    before = set(live_checks())
+    engine = StalledEngine()
+    database = Database(engine)
+    probe = DatabaseProbe(timeout_s=0.05)
+
+    async def many_requests() -> int:
+        for _ in range(3):
+            answers = await asyncio.gather(*(probe.reachable(database) for _ in range(50)))
+            assert answers == [False] * 50
+        return len(probe._current.future._done_callbacks)
+
+    try:
+        callbacks = asyncio.run(many_requests())
+    finally:
+        engine.release.set()
+        assert wait_until(lambda: not live_checks(before))
+        probe.close()
+
+    assert engine.connects == 1
+    assert callbacks <= 1
+
+
 def test_close_does_not_wait_for_a_stuck_check(use_database, replace_state):
     before = set(live_checks())
     engine = StalledEngine()
