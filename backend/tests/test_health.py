@@ -20,7 +20,7 @@ from sqlalchemy.pool import NullPool
 from app.database import DISPOSE_TIMEOUT_S, PROBE_CONNECT_TIMEOUT_S, Database
 from app.main import create_app
 from app.rate_limit import bucket_of
-from app.readiness import CHECK_THREAD_NAME, RESULT_TTL_S, DatabaseProbe
+from app.readiness import CHECK_THREAD_NAME, RESULT_TTL_S, SLOW_CHECK_S, DatabaseProbe
 from tests.helpers import new_browser
 from tests.test_rate_limit import limited  # noqa: F401  (fixture)
 
@@ -606,6 +606,33 @@ def test_a_check_that_fails_oddly_still_ends_and_lets_the_next_one_start(
         assert client.get("/health/ready").json() == DATABASE_DOWN
         assert engine.connects == 2
     finally:
+        assert wait_until(lambda: not live_checks(before))
+        probe.close()
+
+
+def test_a_check_running_longer_than_10_s_is_logged_once(use_database, replace_state, caplog):
+    """No deadline cuts a check off (only one is ever alive), but one that hangs is
+    reported once, by the first request that waited for it after SLOW_CHECK_S."""
+    before = set(live_checks())
+    clock = FakeClock()
+    engine = StalledEngine()
+    probe = DatabaseProbe(timeout_s=0.05, clock=clock)
+    replace_state("readiness", probe)
+    client = use_database(Database(engine))
+    try:
+        client.get("/health/ready")
+        clock.advance(SLOW_CHECK_S - 1)
+        client.get("/health/ready")
+        assert readiness_lines(caplog) == []
+
+        clock.advance(2)
+        for _ in range(3):
+            assert client.get("/health/ready").json() == DATABASE_DOWN
+        assert readiness_lines(caplog) == [
+            "Readiness: the check has been running for more than 10 s"
+        ]
+    finally:
+        engine.release.set()
         assert wait_until(lambda: not live_checks(before))
         probe.close()
 

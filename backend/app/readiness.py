@@ -21,6 +21,8 @@ DATABASE_TIMEOUT_S = 2.0
 # costs one connection every 2 s at most.
 RESULT_TTL_S = 2.0
 CHECK_THREAD_NAME = "readiness-check"
+# No deadline cuts a check off; one that runs longer than this is logged once.
+SLOW_CHECK_S = 10.0
 
 
 def _describe(exc: BaseException) -> str:
@@ -35,8 +37,11 @@ def _describe(exc: BaseException) -> str:
 class _Check:
     """One run of SELECT 1, in a daemon thread of its own."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, started: float) -> None:
         self.database = database
+        self.started = started
+        # Whether a request has logged that this check runs long (once per check).
+        self.reported_slow = False
         self.future: Future[bool] = Future()
         # Running from the start, so nothing can cancel it.
         self.future.set_running_or_notify_cancel()
@@ -62,13 +67,16 @@ class DatabaseProbe:
     out; the check goes on. While a check is alive no other starts, however long it
     takes: one stuck where no limit reaches (name resolution, or a server whose kernel
     still answers while the process is frozen, as with `docker pause` in the middle of
-    SELECT 1) keeps every request waiting for it and answering 503, and the
-    first request after it ends starts a new one. So there is never more than one check
+    SELECT 1) keeps every request waiting for it and answering 503, and the first
+    request after it ends starts a new one. So there is never more than one check
     thread, and a result younger than ttl_s (2 s) is answered again without a check.
+    The first request that waited for a check older than SLOW_CHECK_S (10 s) logs it.
 
     Only the check itself records the state and writes the log, and only when the
     state changes: a request that times out changes nothing, so a slow but successful
-    check is not reported as an outage.
+    check is not reported as an outage. A check records nothing when the requests have
+    moved on to another database (only when tests swap it) and logs nothing once the
+    probe is closed, since the process may then be exiting.
     """
 
     def __init__(
@@ -98,12 +106,13 @@ class DatabaseProbe:
             if self._closed:
                 return False
             self._database = database
+            now = self._clock()
             last = self._last
-            if last is not None and last[0] is database and self._clock() - last[2] < self.ttl_s:
+            if last is not None and last[0] is database and now - last[2] < self.ttl_s:
                 return last[1]
             check = self._current
             if check is None or check.future.done():
-                check = self._current = self._start(database)
+                check = self._current = self._start(database, now)
             elif check.database is not database:
                 # Still running for another database (only when tests swap it): it says
                 # nothing about this one, and no second check starts while it is alive.
@@ -119,6 +128,7 @@ class DatabaseProbe:
             # on the waiter is removed with it.
             return await asyncio.wait_for(asyncio.shield(waiter), self.timeout_s)
         except TimeoutError:
+            self._report_if_slow(check)
             return False
 
     def close(self) -> None:
@@ -128,8 +138,21 @@ class DatabaseProbe:
         with self._lock:
             self._closed = True
 
-    def _start(self, database: Database) -> _Check:
-        check = _Check(database)
+    def _report_if_slow(self, check: _Check) -> None:
+        """Log, once per check, that it has been running for more than SLOW_CHECK_S:
+        nothing else is logged while a check hangs."""
+        with self._lock:
+            if (
+                check.reported_slow
+                or self._closed
+                or self._clock() - check.started <= SLOW_CHECK_S
+            ):
+                return
+            check.reported_slow = True
+        logger.warning("Readiness: the check has been running for more than %g s", SLOW_CHECK_S)
+
+    def _start(self, database: Database, now: float) -> _Check:
+        check = _Check(database, now)
         threading.Thread(
             target=self._run, args=(check,), name=CHECK_THREAD_NAME, daemon=True
         ).start()
