@@ -16,13 +16,14 @@ export default defineConfig({
   preview: { strictPort: true },
   server: {
     strictPort: true,
-    // Keys are path prefixes. List every API path explicitly, even where one is a
-    // prefix of another (/predict and /predictions, /health and /health/ready): a
-    // path missing here gets Vite's index.html instead of JSON. nginx.conf forwards
-    // the same paths (backend/tests/test_deployment.py compares them).
+    // Keys are path prefixes, or regular expressions when they start with ^. List
+    // every API path explicitly, even where one is a prefix of another (/predict and
+    // /predictions): a path missing here gets Vite's index.html instead of JSON.
+    // nginx.conf forwards the same paths (backend/tests/test_deployment.py compares
+    // them). /health is anchored so that /health/ready, which only the Compose
+    // healthcheck asks, is not forwarded.
     proxy: {
-      '/health': BACKEND_URL,
-      '/health/ready': BACKEND_URL,
+      '^/health(?:\\?|$)': BACKEND_URL,
       '/predict': BACKEND_URL,
       '/predictions': BACKEND_URL,
       '/stats': BACKEND_URL,

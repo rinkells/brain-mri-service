@@ -141,9 +141,8 @@ def test_example_env_files_hold_the_default_not_mri_thresholds(path):
 
 # --- Frontend image: the built UI behind nginx ----------------------------------
 
-# The paths the UI calls (frontend/src/api/client.ts), as the Vite dev proxy lists them,
-# and /health/ready for checking a deployment through the same port.
-VITE_PROXY_KEY = re.compile(r"^\s*'(/[a-z/]+)':\s*BACKEND_URL", re.MULTILINE)
+# Keys of the Vite dev proxy: path prefixes, or regular expressions when they start with ^.
+VITE_PROXY_KEY = re.compile(r"^\s*'([^']+)':\s*BACKEND_URL", re.MULTILINE)
 # location [=|^~] path { ... } blocks; the config has no nested blocks inside them.
 NGINX_LOCATION = re.compile(r"location\s+(?:=\s*|\^~\s*)?(\S+)\s*\{([^}]*)\}")
 SECURITY_HEADERS = {
@@ -193,12 +192,26 @@ def test_csp_allows_exactly_the_inline_theme_script_of_index_html():
     assert hashes and allowed == hashes
 
 
-def test_nginx_proxies_the_api_paths_of_the_ui_and_nothing_else():
+def vite_proxy_keys() -> list[str]:
     vite = (FRONTEND_DIR / "vite.config.ts").read_text(encoding="utf-8")
-    ui_paths = set(VITE_PROXY_KEY.findall(vite))
+    # The TypeScript source escapes backslashes in the string literal.
+    return [key.replace("\\\\", "\\") for key in VITE_PROXY_KEY.findall(vite)]
+
+
+def vite_proxies(url: str) -> bool:
+    """Whether the Vite dev server forwards url to the API, matching keys as Vite does."""
+    return any(
+        re.search(key, url) if key.startswith("^") else url.startswith(key)
+        for key in vite_proxy_keys()
+    )
+
+
+def test_nginx_proxies_the_api_paths_of_the_ui_and_nothing_else():
+    # The paths the UI calls (frontend/src/api/client.ts), as the Vite dev proxy lists them.
+    ui_paths = {re.match(r"\^?(/[a-z/]+)", key).group(1) for key in vite_proxy_keys()}
     proxied = {path for path, body in NGINX_LOCATION.findall(nginx_conf()) if "proxy_pass" in body}
 
-    assert ui_paths == {"/health", "/health/ready", "/predict", "/predictions", "/stats", "/auth"}
+    assert ui_paths == {"/health", "/predict", "/predictions", "/stats", "/auth"}
     # Vite matches keys as prefixes; nginx needs /predictions/ besides /predictions, and
     # takes everything under /auth/ (the API has no /auth path of its own).
     assert proxied == (ui_paths - {"/auth"}) | {"/predictions/", "/auth/"}
@@ -305,11 +318,17 @@ def test_image_healthcheck_stays_on_liveness():
     assert "'http://127.0.0.1:8000/health'" in healthcheck.group(1)
 
 
-def test_nginx_forwards_the_readiness_check():
+def test_the_readiness_check_stays_inside_compose():
+    """/health/ready tells whether the database is up and is not rate limited, so the UI
+    port does not expose it: nginx answers 404 itself (without this, the SPA fallback of
+    location / would answer 200 with index.html) and the Vite dev proxy does not forward
+    it. The Compose healthcheck asks the API on 127.0.0.1:8000 inside its container."""
     locations = dict(NGINX_LOCATION.findall(nginx_conf()))
 
-    assert locations["/health/ready"].strip() == "proxy_pass $api;"
+    assert locations["/health/ready"].strip() == "return 404;"
     assert locations["/health"].strip() == "proxy_pass $api;"
+    assert vite_proxies("/health") and vite_proxies("/health?probe=1")
+    assert not vite_proxies("/health/ready")
 
 
 def test_frontend_container_is_limited_and_read_only(services):
