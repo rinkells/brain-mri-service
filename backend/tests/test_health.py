@@ -777,7 +777,7 @@ def test_shutdown_closes_the_probe_and_both_engines(settings, tmp_path, monkeypa
         record("engine", state.database.engine, "dispose")
         record("probe_engine", state.database.probe_engine, "dispose")
 
-    # The probe first, so no check is left using its engine when the engines go.
+    # Only the order of the calls is checked: close() does not wait for a running check.
     assert closed == ["probe", "engine", "probe_engine"]
 
 
