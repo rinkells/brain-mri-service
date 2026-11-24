@@ -7,8 +7,6 @@ loaded and the database answers SELECT 1, and is what the Compose healthcheck of
 import logging
 import secrets
 import socket
-import struct
-import sys
 import threading
 import time
 
@@ -18,14 +16,15 @@ from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
 
-from app.database import PROBE_CONNECT_TIMEOUT_S, PROBE_STATEMENT_TIMEOUT_MS, Database
+from app.database import PROBE_CONNECT_TIMEOUT_S, Database
 from app.main import create_app
 from app.rate_limit import bucket_of
-from app.readiness import CHECK_DEADLINE_S, DatabaseProbe
+from app.readiness import CHECK_THREAD_NAME, DatabaseProbe
 from tests.helpers import new_browser
 from tests.test_rate_limit import limited  # noqa: F401  (fixture)
 
 READY = {"status": "ready", "model": True, "database": True}
+DATABASE_DOWN = {"status": "not_ready", "model": True, "database": False}
 # Words of the exception the stand-in engine raises; none of them may reach a response.
 SECRET_ERROR = 'password authentication failed for user "brain_mri" at db:5432 (secret-7Qx)'
 FOREIGN_PAGE = {
@@ -54,7 +53,8 @@ class FailingEngine:
 
 
 class StalledEngine:
-    """An engine whose connect() hangs until released, like a database that never answers."""
+    """An engine whose connect() hangs until released, like a database that never answers
+    or a check stuck in name resolution."""
 
     def __init__(self) -> None:
         self.release = threading.Event()
@@ -187,7 +187,7 @@ def test_a_database_that_does_not_answer_is_given_up_after_the_timeout(
         elapsed = time.perf_counter() - started
 
         assert [r.status_code for r in answers] == [503] * 3
-        assert answers[0].json() == {"status": "not_ready", "model": True, "database": False}
+        assert answers[0].json() == DATABASE_DOWN
         assert elapsed < 3
         assert engine.connects == 1
     finally:
@@ -195,10 +195,10 @@ def test_a_database_that_does_not_answer_is_given_up_after_the_timeout(
         probe.close()
 
 
-def test_the_production_timeout_is_two_seconds():
+def test_the_production_timeout_and_cache_are_two_seconds():
     probe = DatabaseProbe()
     try:
-        assert probe.timeout_s == 2.0
+        assert (probe.timeout_s, probe.ttl_s) == (2.0, 2.0)
     finally:
         probe.close()
 
@@ -288,6 +288,15 @@ def readiness_lines(caplog) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.getMessage().startswith("Readiness:")]
 
 
+def live_checks(other_than=frozenset()) -> list[threading.Thread]:
+    """Threads of readiness checks still running, except those in other_than."""
+    return [
+        t
+        for t in threading.enumerate()
+        if t.name == CHECK_THREAD_NAME and t.is_alive() and t not in other_than
+    ]
+
+
 # --- The check: a connection of its own, time limits, a short cache ---------------------
 
 
@@ -340,16 +349,6 @@ def test_postgres_checks_open_a_new_connection_with_a_limit_on_every_stage():
     assert seen["application_name"] == "brain-mri-readiness"
 
 
-def test_the_limits_add_up_to_the_bound_of_a_check():
-    assert PROBE_CONNECT_TIMEOUT_S + PROBE_STATEMENT_TIMEOUT_MS / 1000 <= CHECK_DEADLINE_S
-    assert CHECK_DEADLINE_S == 3.0
-    probe = DatabaseProbe()
-    try:
-        assert (probe.timeout_s, probe.ttl_s, probe.deadline_s) == (2.0, 2.0, 3.0)
-    finally:
-        probe.close()
-
-
 @pytest.fixture
 def silent_server():
     """A TCP server that accepts connections and never sends a byte: like a paused
@@ -390,79 +389,11 @@ def test_a_server_that_never_answers_the_connection_is_given_up(
         started = time.perf_counter()
         assert client.get("/health/ready").status_code == 503
         assert wait_until(lambda: readiness_lines(caplog), timeout=5)
-        assert time.perf_counter() - started < CHECK_DEADLINE_S + 0.5
+        assert time.perf_counter() - started < PROBE_CONNECT_TIMEOUT_S + 1.0
     finally:
         probe.close()
         database.dispose()
     assert "OperationalError" in readiness_lines(caplog)[0]
-
-
-@pytest.fixture
-def mute_postgres():
-    """A Postgres stand-in that lets a client in (AuthenticationOk, ReadyForQuery) and
-    then never answers a query: like a database paused after the connection was made.
-    Only the socket watchdog of the probe can end a check stuck there. Yields its port."""
-    server = socket.create_server(("127.0.0.1", 0))
-    clients = []
-    stop = threading.Event()
-
-    def serve():
-        server.settimeout(0.1)
-        while not stop.is_set():
-            try:
-                connection, _ = server.accept()
-            except OSError:
-                continue
-            clients.append(connection)
-            connection.settimeout(2)
-            try:
-                length = struct.unpack("!I", connection.recv(4))[0]
-                connection.recv(length - 4)
-                # AuthenticationOk, then ReadyForQuery (idle).
-                connection.sendall(b"R" + struct.pack("!II", 8, 0) + b"Z" + struct.pack("!IB", 5, 73))
-            except OSError:
-                pass
-
-    thread = threading.Thread(target=serve, daemon=True)
-    thread.start()
-    yield server.getsockname()[1]
-    stop.set()
-    thread.join(timeout=2)
-    for connection in clients:
-        connection.close()
-    server.close()
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason=(
-        "Windows does not wake a wait on a socket that is shut down locally; the API runs "
-        "on Linux, where this is checked (see README, Tests)"
-    ),
-)
-def test_a_database_that_stops_answering_mid_check_is_cut_off_at_the_deadline(
-    mute_postgres, use_database, replace_state, caplog
-):
-    """statement_timeout is enforced by the server and tcp_user_timeout only fires for
-    data that is not acknowledged; a paused server acknowledges and never answers. The
-    probe then shuts the socket down at the deadline, so the check still ends."""
-    database = Database.from_url(
-        f"postgresql+psycopg://u:p@127.0.0.1:{mute_postgres}/db?{NO_ENCRYPTION}"
-    )
-    probe = DatabaseProbe(timeout_s=0.2, deadline_s=1.0)
-    replace_state("readiness", probe)
-    client = use_database(database)
-    try:
-        started = time.perf_counter()
-        assert client.get("/health/ready").status_code == 503
-        assert wait_until(lambda: readiness_lines(caplog), timeout=5)
-        elapsed = time.perf_counter() - started
-    finally:
-        probe.close()
-        database.dispose()
-
-    assert 0.9 < elapsed < 2.5
-    assert "no answer within 1 s" in readiness_lines(caplog)[0]
 
 
 def test_a_fresh_result_is_reused_for_two_seconds(use_database, replace_state):
@@ -555,41 +486,50 @@ def test_a_request_that_times_out_writes_nothing_to_the_log(
     assert "OperationalError" in lines[0] and "timed out" in lines[0]
 
 
-def test_a_check_past_its_deadline_is_given_up_and_a_new_one_starts(
-    use_database, replace_state
-):
-    """A check stuck where no limit reaches (e.g. name resolution) does not keep later
-    requests waiting for it: after the deadline the next request starts a new check."""
+def test_a_stuck_check_is_the_only_one_until_it_ends(use_database, replace_state):
+    """At most one check is alive. While it hangs where no limit reaches it (e.g. name
+    resolution), requests wait for it up to the timeout and get 503 without starting
+    another, however long it hangs; once it ends, the next request starts a new one."""
+    before = set(live_checks())
+    clock = FakeClock()
     engine = StalledEngine()
-    probe = DatabaseProbe(timeout_s=0.05, deadline_s=0.3)
+    probe = DatabaseProbe(timeout_s=0.05, clock=clock)
     replace_state("readiness", probe)
     client = use_database(Database(engine))
     try:
-        client.get("/health/ready")
+        for _ in range(5):
+            assert client.get("/health/ready").json() == DATABASE_DOWN
+            clock.advance(60)
         assert engine.connects == 1
-        time.sleep(0.35)
-        client.get("/health/ready")
+        assert len(live_checks(before)) == 1
+
+        engine.release.set()
+        assert wait_until(lambda: probe.last_result() is False)
+        clock.advance(60)
+        assert client.get("/health/ready").json() == DATABASE_DOWN
         assert engine.connects == 2
     finally:
         engine.release.set()
         probe.close()
 
 
-def test_close_waits_for_a_running_check_no_longer_than_its_deadline(
-    use_database, replace_state
-):
+def test_close_does_not_wait_for_a_stuck_check(use_database, replace_state):
+    before = set(live_checks())
     engine = StalledEngine()
-    probe = DatabaseProbe(timeout_s=0.05, deadline_s=0.5)
+    probe = DatabaseProbe(timeout_s=0.05)
     replace_state("readiness", probe)
     client = use_database(Database(engine))
     try:
         client.get("/health/ready")
-        checks = [t for t in threading.enumerate() if t.name == "readiness-check"]
+        checks = live_checks(before)
         started = time.perf_counter()
         probe.close()
-        assert time.perf_counter() - started < 1.0
-        # Never waited for at exit, so a stuck check cannot hold the process.
-        assert checks and all(t.daemon for t in checks)
+        assert time.perf_counter() - started < 0.2
+        # Never waited for at exit either, so a stuck check cannot hold the process.
+        assert len(checks) == 1 and checks[0].daemon
+        # A closed probe starts no more checks.
+        assert client.get("/health/ready").json() == DATABASE_DOWN
+        assert engine.connects == 1
     finally:
         engine.release.set()
 
