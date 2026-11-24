@@ -55,7 +55,12 @@ class FailingEngine:
 
 class StalledEngine:
     """An engine whose connect() hangs until released, like a database that never answers
-    or a check stuck in name resolution; with stall_dispose, dispose() hangs too."""
+    or a check stuck in name resolution; with stall_dispose, dispose() hangs too.
+
+    Like a driver, it gives up a moment after being released (GIVE_UP_S), so a test that
+    releases it must wait for its check to end (see no_check_outlives_its_test)."""
+
+    GIVE_UP_S = 0.5
 
     def __init__(self, stall_dispose: bool = False) -> None:
         self.release = threading.Event()
@@ -65,6 +70,7 @@ class StalledEngine:
     def connect(self):
         self.connects += 1
         self.release.wait(timeout=30)
+        time.sleep(self.GIVE_UP_S)
         raise OperationalError("SELECT 1", {}, Exception("timed out"))
 
     def dispose(self) -> None:
@@ -180,6 +186,7 @@ def test_a_database_that_does_not_answer_is_given_up_after_the_timeout(
     """SELECT 1 runs outside the event loop with a time limit (2 s in production): a
     hung database makes the answer 503, not a hung healthcheck. Only one check runs at
     a time, so probes during the hang wait for it instead of starting more threads."""
+    before = set(live_checks())
     engine = StalledEngine()
     client = use_database(Database(engine))
     probe = DatabaseProbe(timeout_s=0.2)
@@ -195,6 +202,7 @@ def test_a_database_that_does_not_answer_is_given_up_after_the_timeout(
         assert engine.connects == 1
     finally:
         engine.release.set()
+        assert wait_until(lambda: not live_checks(before))
         probe.close()
 
 
@@ -298,6 +306,18 @@ def live_checks(other_than=frozenset()) -> list[threading.Thread]:
         for t in threading.enumerate()
         if t.name == CHECK_THREAD_NAME and t.is_alive() and t not in other_than
     ]
+
+
+@pytest.fixture(autouse=True)
+def no_check_outlives_its_test():
+    """A check still running after its test would log "Readiness: ..." into the caplog of
+    a later one. A thread that has just answered gets a moment to exit; a test that
+    releases a stalled engine must wait for its check itself."""
+    before = set(live_checks())
+    yield
+    assert wait_until(lambda: not live_checks(before), timeout=0.2), (
+        "a readiness check outlived its test"
+    )
 
 
 # --- The check: a connection of its own, time limits, a short cache ---------------------
@@ -513,6 +533,7 @@ def test_a_stuck_check_is_the_only_one_until_it_ends(use_database, replace_state
         assert engine.connects == 2
     finally:
         engine.release.set()
+        assert wait_until(lambda: not live_checks(before))
         probe.close()
 
 
@@ -535,6 +556,7 @@ def test_close_does_not_wait_for_a_stuck_check(use_database, replace_state):
         assert engine.connects == 1
     finally:
         engine.release.set()
+        assert wait_until(lambda: not live_checks(before))
 
 
 def test_shutdown_with_a_stuck_check_does_not_block_the_event_loop(settings, tmp_path):
@@ -544,6 +566,7 @@ def test_shutdown_with_a_stuck_check_does_not_block_the_event_loop(settings, tmp
     app = create_app(
         settings.model_copy(update={"database_url": f"sqlite:///{tmp_path / 'history.db'}"})
     )
+    before = set(live_checks())
     stalled = StalledEngine(stall_dispose=True)
 
     async def shut_down_while_ticking() -> tuple[float, float]:
@@ -574,6 +597,7 @@ def test_shutdown_with_a_stuck_check_does_not_block_the_event_loop(settings, tmp
         longest_gap, took = asyncio.run(shut_down_while_ticking())
     finally:
         stalled.release.set()
+        assert wait_until(lambda: not live_checks(before))
 
     assert longest_gap < 0.2
     assert took < DISPOSE_TIMEOUT_S + 0.5
