@@ -13,8 +13,11 @@ from sqlalchemy.pool import NullPool, StaticPool
 # Fail fast when Postgres is unreachable: a prediction waits for the save.
 POSTGRES_CONNECT_TIMEOUT_S = 3
 
-# The readiness check (GET /health/ready) opens a connection of its own for each check,
-# with a limit on every stage; see app.readiness for how they add up.
+# The readiness check (GET /health/ready) opens a connection of its own for each check.
+# Each limit below acts on one stage only; they do not add up to a bound on a check. A
+# check stuck where none acts (name resolution, or a server whose kernel answers while
+# the process is frozen) is not cut off; see "Перевірки стану: liveness і readiness" in
+# README.md.
 PROBE_CONNECT_TIMEOUT_S = 2  # TCP connection, startup and authentication (2 s is the minimum)
 PROBE_STATEMENT_TIMEOUT_MS = 1000  # SELECT 1, enforced by the server
 PROBE_TCP_USER_TIMEOUT_MS = 2000  # sent data left unacknowledged: a dropped network
