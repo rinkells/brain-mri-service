@@ -22,7 +22,10 @@ SECURITY_HEADERS = {
 NO_STORE = {"Cache-Control": "no-store"}
 AUTH_PREFIX = "/auth/"
 # Liveness and readiness. The container healthchecks ask them, so neither is rate limited
-# nor checked for cross-site requests, and neither needs a session; they reveal nothing.
+# nor checked for cross-site requests, and neither needs a session. /health reveals
+# nothing beyond what the UI shows. /health/ready tells whether the database is up; its
+# load is bounded by the 2 s cache and the single live check (app.readiness), and it is
+# reachable only inside Compose and on port 8000, never through nginx (port 8080).
 HEALTH_PATH = "/health"
 READY_PATH = "/health/ready"
 HEALTH_PATHS = frozenset({HEALTH_PATH, READY_PATH})

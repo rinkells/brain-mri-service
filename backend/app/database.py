@@ -1,6 +1,9 @@
 """Database connection for the prediction history."""
 
+import asyncio
+import threading
 from collections.abc import Iterator
+from concurrent.futures import Future
 from contextlib import contextmanager
 
 from sqlalchemy import Engine, MetaData, create_engine, event, make_url
@@ -10,13 +13,25 @@ from sqlalchemy.pool import NullPool, StaticPool
 # Fail fast when Postgres is unreachable: a prediction waits for the save.
 POSTGRES_CONNECT_TIMEOUT_S = 3
 
-# The readiness check (GET /health/ready) opens a connection of its own for each check,
-# with a limit on every stage; see app.readiness for how they add up.
+# The readiness check (GET /health/ready) opens a connection of its own for each check.
+# Each limit below acts on one stage only; they do not add up to a bound on a check. A
+# check stuck where none acts (name resolution, or a server whose kernel answers while
+# the process is frozen) is not cut off; see "Перевірки стану: liveness і readiness" in
+# README.md.
 PROBE_CONNECT_TIMEOUT_S = 2  # TCP connection, startup and authentication (2 s is the minimum)
 PROBE_STATEMENT_TIMEOUT_MS = 1000  # SELECT 1, enforced by the server
 PROBE_TCP_USER_TIMEOUT_MS = 2000  # sent data left unacknowledged: a dropped network
+# SELECT 1 acknowledged, but the answer never comes because the network went away for
+# long: TCP keepalive gives up instead of the OS default (~2 h). On Linux
+# tcp_user_timeout (2 s) decides when: the connection is dropped at the first probe
+# sent after 2 s without an answer, about 3 s in all, so the count does not come into it.
+PROBE_KEEPALIVES_IDLE_S = 2
+PROBE_KEEPALIVES_INTERVAL_S = 1
+PROBE_KEEPALIVES_COUNT = 3
 # How its connections show in pg_stat_activity.
 PROBE_APPLICATION_NAME = "brain-mri-readiness"
+# How long shutdown waits for the engines to close (see Database.dispose_off_loop).
+DISPOSE_TIMEOUT_S = 1.0
 
 # Stable constraint and index names, so Alembic migrations stay predictable.
 NAMING_CONVENTION = {
@@ -88,6 +103,10 @@ def create_probe_engine(url: str) -> Engine:
             "connect_timeout": PROBE_CONNECT_TIMEOUT_S,
             "options": f"-c statement_timeout={PROBE_STATEMENT_TIMEOUT_MS}",
             "tcp_user_timeout": PROBE_TCP_USER_TIMEOUT_MS,
+            "keepalives": 1,
+            "keepalives_idle": PROBE_KEEPALIVES_IDLE_S,
+            "keepalives_interval": PROBE_KEEPALIVES_INTERVAL_S,
+            "keepalives_count": PROBE_KEEPALIVES_COUNT,
             "application_name": PROBE_APPLICATION_NAME,
         },
     )
@@ -117,3 +136,26 @@ class Database:
         self.engine.dispose()
         if self.probe_engine is not self.engine:
             self.probe_engine.dispose()
+
+    async def dispose_off_loop(self, timeout_s: float = DISPOSE_TIMEOUT_S) -> bool:
+        """dispose() for shutdown: in a daemon thread, waited for no longer than
+        timeout_s, so a connection that hangs while closing holds up neither the event
+        loop nor the exit. Not asyncio.to_thread: the loop's executor is joined when the
+        loop closes. False when the time ran out."""
+        done: Future[None] = Future()
+        done.set_running_or_notify_cancel()
+
+        def run() -> None:
+            try:
+                self.dispose()
+            except Exception as exc:
+                done.set_exception(exc)
+            else:
+                done.set_result(None)
+
+        threading.Thread(target=run, name="database-dispose", daemon=True).start()
+        try:
+            await asyncio.wait_for(asyncio.wrap_future(done), timeout_s)
+        except TimeoutError:
+            return False
+        return True

@@ -36,7 +36,7 @@ from app.auth import (
 )
 from app.auth_api import body_validation_error_handler
 from app.auth_api import router as auth_router
-from app.database import Database
+from app.database import DISPOSE_TIMEOUT_S, Database
 from app.errors import (
     BODY_TOO_LARGE,
     CodedHTTPException,
@@ -467,9 +467,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            # A readiness check that hangs is not waited for (its thread is a daemon), and
+            # the engines close off the event loop, in a second at most.
             app.state.readiness.close()
             if app.state.database is not None:
-                app.state.database.dispose()
+                if not await app.state.database.dispose_off_loop():
+                    logger.warning(
+                        "Shutdown: the database connections did not close within %g s",
+                        DISPOSE_TIMEOUT_S,
+                    )
 
     # ENABLE_DOCS=false removes Swagger UI, ReDoc and the schema they are built from.
     docs = settings.enable_docs
