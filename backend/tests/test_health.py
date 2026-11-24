@@ -610,6 +610,25 @@ def test_a_check_that_fails_oddly_still_ends_and_lets_the_next_one_start(
         probe.close()
 
 
+def test_a_check_that_ends_after_close_writes_nothing_to_the_log(
+    use_database, replace_state, caplog
+):
+    """At shutdown a stuck check is not waited for; when it ends, the process may be
+    finalizing, and a daemon thread writing to stderr then can abort it."""
+    before = set(live_checks())
+    engine = StalledEngine()
+    probe = DatabaseProbe(timeout_s=0.05)
+    replace_state("readiness", probe)
+    client = use_database(Database(engine))
+    client.get("/health/ready")
+
+    probe.close()
+    engine.release.set()
+    assert wait_until(lambda: not live_checks(before))
+
+    assert readiness_lines(caplog) == []
+
+
 def test_close_does_not_wait_for_a_stuck_check(use_database, replace_state):
     before = set(live_checks())
     engine = StalledEngine()

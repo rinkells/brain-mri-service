@@ -118,8 +118,9 @@ class DatabaseProbe:
         return result and check.database is database
 
     def close(self) -> None:
-        """Start no more checks. A running one is not waited for: its thread is a
-        daemon and ends when the driver gives up or the database answers."""
+        """Start no more checks and write no more to the log. A running check is not
+        waited for: its thread is a daemon and ends when the driver gives up or the
+        database answers."""
         with self._lock:
             self._closed = True
 
@@ -151,6 +152,10 @@ class DatabaseProbe:
             previous = self._reachable
             self._reachable = reachable
             self._last = (database, reachable, self._clock())
+            if self._closed:
+                # The process may be exiting: a daemon thread writing to stderr while
+                # the interpreter finalizes can abort it.
+                return
         if reachable and previous is False:
             logger.info("Readiness: the database answers again")
         elif not reachable and previous is not False:
