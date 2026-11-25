@@ -3,6 +3,7 @@ import userEvent, { type UserEvent } from '@testing-library/user-event'
 import { describe, expect, test, vi } from 'vitest'
 
 import App from './App'
+import { PASSWORD_MAX_LENGTH } from './lib/credentials'
 import {
   bodyOf,
   bodyTooLarge,
@@ -651,33 +652,116 @@ describe('sign-in errors told apart by their code', () => {
   })
 })
 
-describe('the fields are no longer than the backend allows', () => {
+describe('the name is no longer than the backend allows', () => {
   test('sign-in and registration', async () => {
     mockApi()
     window.location.hash = '#/login'
     render(<App />)
 
     expect(await screen.findByLabelText('Ім’я користувача')).toHaveAttribute('maxlength', '32')
-    expect(field('Пароль')).toHaveAttribute('maxlength', '128')
 
     window.location.hash = '#/register'
     await screen.findByRole('heading', { name: 'Реєстрація' })
     expect(field('Ім’я користувача')).toHaveAttribute('maxlength', '32')
-    expect(field('Пароль')).toHaveAttribute('maxlength', '128')
-    expect(field('Підтвердження пароля')).toHaveAttribute('maxlength', '128')
+  })
+})
+
+// maxLength counts UTF-16 units, while credentials.ts and the backend count characters
+// (code points): an emoji is one character but two units, so the browser would cut a
+// pasted password short without a word. Password fields therefore have no maxLength.
+describe('passwords with characters outside the BMP are never cut short', () => {
+  const EMOJI = '😀'
+  /** `length` characters (code points), most of them two UTF-16 units each. */
+  function emojiPassword(length: number) {
+    return 'a1' + EMOJI.repeat(length - 2)
+  }
+
+  async function paste(user: UserEvent, input: HTMLElement, text: string) {
+    await user.click(input)
+    await user.paste(text)
+  }
+
+  async function openRegistration() {
+    window.location.hash = '#/register'
+    const user = userEvent.setup()
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Реєстрація' })
+    await user.type(field('Ім’я користувача'), 'alice')
+    return user
+  }
+
+  test('one character over the limit is pasted whole and refused as too long', async () => {
+    const fetchMock = mockApi()
+    const user = await openRegistration()
+    const password = emojiPassword(PASSWORD_MAX_LENGTH + 1)
+
+    await paste(user, field('Пароль'), password)
+    await paste(user, field('Підтвердження пароля'), password)
+
+    expect(field('Пароль')).toHaveValue(password)
+    expect(field('Підтвердження пароля')).toHaveValue(password)
+
+    await user.click(within(form('Реєстрація')).getByRole('button', { name: 'Зареєструватися' }))
+
+    expect(field('Пароль')).toHaveAttribute('aria-invalid', 'true')
+    expect(field('Пароль')).toHaveAccessibleDescription(
+      'Пароль має містити від 10 до 128 символів.',
+    )
+    expect(field('Підтвердження пароля')).not.toHaveAttribute('aria-invalid')
+    expect(callsTo(fetchMock, '/auth/register', 'POST')).toHaveLength(0)
   })
 
-  test('the password of the account deletion', async () => {
-    mockApi({ me: signedIn() })
+  test('exactly the limit is pasted whole and sent as it is', async () => {
+    const fetchMock = mockApi({ register: () => jsonResponse(makeUser(), 201) })
+    const user = await openRegistration()
+    const password = emojiPassword(PASSWORD_MAX_LENGTH)
+
+    await paste(user, field('Пароль'), password)
+    await paste(user, field('Підтвердження пароля'), password)
+
+    expect(field('Пароль')).toHaveValue(password)
+    expect(field('Підтвердження пароля')).toHaveValue(password)
+
+    await user.click(within(form('Реєстрація')).getByRole('button', { name: 'Зареєструватися' }))
+
+    await waitFor(() => expect(callsTo(fetchMock, '/auth/register', 'POST')).toHaveLength(1))
+    const [[, init]] = callsTo(fetchMock, '/auth/register', 'POST')
+    expect(bodyOf(init)).toEqual({ username: 'alice', password })
+  })
+
+  test('sign-in sends the pasted password whole', async () => {
+    const fetchMock = mockApi({ login: () => jsonResponse(makeUser()) })
+    window.location.hash = '#/login'
+    const user = userEvent.setup()
+    render(<App />)
+    const password = emojiPassword(PASSWORD_MAX_LENGTH + 1)
+
+    await user.type(await screen.findByLabelText('Ім’я користувача'), 'alice')
+    await paste(user, field('Пароль'), password)
+    expect(field('Пароль')).toHaveValue(password)
+    await user.click(within(form('Вхід')).getByRole('button', { name: 'Увійти' }))
+
+    await waitFor(() => expect(callsTo(fetchMock, '/auth/login', 'POST')).toHaveLength(1))
+    const [[, init]] = callsTo(fetchMock, '/auth/login', 'POST')
+    expect(bodyOf(init)).toEqual({ username: 'alice', password })
+  })
+
+  test('the account deletion sends the pasted password whole', async () => {
+    const fetchMock = mockApi({ me: signedIn(), deleteAccount: noContent })
     const user = userEvent.setup()
     render(<App />)
     await openAccountMenu(user)
     await user.click(screen.getByRole('button', { name: 'Видалити акаунт' }))
+    const dialog = screen.getByRole('dialog')
+    const password = emojiPassword(PASSWORD_MAX_LENGTH + 1)
 
-    expect(within(screen.getByRole('dialog')).getByLabelText('Пароль')).toHaveAttribute(
-      'maxlength',
-      '128',
-    )
+    await paste(user, within(dialog).getByLabelText('Пароль'), password)
+    expect(within(dialog).getByLabelText('Пароль')).toHaveValue(password)
+    await user.click(within(dialog).getByRole('button', { name: 'Видалити назавжди' }))
+
+    await waitFor(() => expect(callsTo(fetchMock, '/auth/me', 'DELETE')).toHaveLength(1))
+    const [[, init]] = callsTo(fetchMock, '/auth/me', 'DELETE')
+    expect(bodyOf(init)).toEqual({ password })
   })
 })
 

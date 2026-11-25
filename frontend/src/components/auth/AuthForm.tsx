@@ -4,7 +4,6 @@ import { login, register } from '../../api/client'
 import type { User } from '../../api/types'
 import { VIEW_HASH } from '../../hooks/useView'
 import {
-  PASSWORD_MAX_LENGTH,
   USERNAME_MAX_LENGTH,
   validateCredentials,
   type CredentialsErrors,
@@ -48,7 +47,9 @@ interface FieldProps {
   onChange: (value: string) => void
   type: 'text' | 'password'
   autoComplete: string
-  maxLength: number
+  /** Only for the name, which is ASCII. Not for passwords: maxLength counts UTF-16 units,
+   * so it would silently cut a password with emoji; credentials.ts checks their length. */
+  maxLength?: number
   error?: string
   hint?: string
   inputRef: RefObject<HTMLInputElement | null>
@@ -199,7 +200,6 @@ export function AuthForm({ mode, onSuccess }: AuthFormProps) {
         onChange={setPassword}
         type={passwordType}
         autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-        maxLength={PASSWORD_MAX_LENGTH}
         error={errors.password}
         hint={mode === 'register' ? HINTS.password : undefined}
         inputRef={passwordRef}
@@ -211,7 +211,6 @@ export function AuthForm({ mode, onSuccess }: AuthFormProps) {
           onChange={setConfirm}
           type={passwordType}
           autoComplete="new-password"
-          maxLength={PASSWORD_MAX_LENGTH}
           error={errors.confirm}
           inputRef={confirmRef}
         />

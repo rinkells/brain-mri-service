@@ -209,7 +209,9 @@ IP address 172.30.250.10`. Тоді один раз виконайте `docker c
 `VITE_MAX_UPLOAD_MB`), тож обидва перевіряють той самий розмір. nginx пропускає тіла
 запитів до 12 МБ (`client_max_body_size` у `frontend/nginx.conf`), тобто трохи більше за
 типові 10 МБ: файл, трохи більший за ліміт, доходить до API, і той відповідає 413 зі своїм
-поясненням. Якщо збільшуєте `MAX_UPLOAD_MB` понад 11, збільште й `client_max_body_size`.
+поясненням. nginx цей ліміт із `.env` не читає: якщо підняти `MAX_UPLOAD_MB` вище за 10,
+треба змінити `client_max_body_size` у `frontend/nginx.conf` (на 1–5 МБ більше) і
+перезібрати `frontend` (`docker compose up -d --build frontend`).
 Знімки й теплові карти `/predict` проходять через nginx наскрізь, без буферизації, а
 відповіді nginx чекає до 120 секунд.
 
@@ -488,7 +490,9 @@ npm run dev
   паролів. Форма перевіряє ті самі правила, що й бекенд, ще до відправки, і показує помилки
   під полями; помилки сервера (неправильне ім'я чи пароль, зайняте ім'я, блокування після
   невдалих спроб або загальний ліміт запитів — кожне з кількістю секунд, задовгі дані) —
-  українською над кнопкою. Ім'я обмежено 32 символами, паролі — 128 (`maxlength`). Після
+  українською над кнопкою. Ім'я обмежено 32 символами (`maxlength`). Поля пароля `maxlength`
+  не мають: браузер рахує його в UTF-16 і мовчки обрізав би пароль з емодзі, тож довжину
+  (до 128 символів) перевіряє форма, а для входу й видалення акаунта — сервер. Після
   відправки поля пароля очищаються; після входу інтерфейс повертається на сторінку, з
   якої прийшов гість;
 - гість може аналізувати знімки, а під результатом бачить примітку «Результат не збережено.
@@ -577,7 +581,8 @@ Compose читає кореневий файл `.env` (шаблон — `.env.ex
 | `POSTGRES_DB` | `brain_mri` | Назва бази |
 | `POSTGRES_PORT` | `5433` | Порт Postgres на `127.0.0.1` (5433, щоб не конфліктувати з локальним Postgres на 5432) |
 | `API_PORT` | `8000` | Порт API на `127.0.0.1` |
-| `DEVICE`, `MAX_UPLOAD_MB`, `MAX_PIXELS`, `MAX_IMAGE_SIDE`, `MAX_CONCURRENT_INFERENCES`, `MAX_QUEUE`, `LOW_CONFIDENCE_THRESHOLD`, `NOT_MRI_COLOR_MAX`, `NOT_MRI_NOISE_MAX`, `NOT_MRI_STD_MIN`, `NOT_MRI_LOWCONTRAST_STD`, `NOT_MRI_DARK_MIN`, `NOT_MRI_OPAQUE_MIN`, `ALLOWED_HOSTS`, `ENABLE_DOCS`, `RATE_LIMIT_ENABLED`, `RATE_LIMIT_PREDICT_PER_MINUTE`, `RATE_LIMIT_WRITE_PER_MINUTE`, `RATE_LIMIT_READ_PER_MINUTE`, `RATE_LIMIT_AUTH_PER_MINUTE`, `SESSION_TTL_HOURS`, `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE`, `SESSION_MAX_PER_USER`, `LOGIN_FAILURES_MAX`, `LOGIN_FAILURES_WINDOW_MINUTES` | як у бекенді | Передаються бекенду; `MAX_UPLOAD_MB` отримує ще й збірка інтерфейсу як `VITE_MAX_UPLOAD_MB`. `TRUSTED_PROXIES` Compose задає сам (адреса `frontend`) |
+| `TORCH_THREADS` | `1` | Кількість потоків PyTorch на один прогноз (`OMP_NUM_THREADS` і `MKL_NUM_THREADS` сервісу `api`): без неї PyTorch бере всі ядра хоста, а не квоту `cpus: 2`, і два одночасні прогнози впираються в тротлінг (виміряно: p95 при двох одночасних запитах ≈ 225–270 мс з 1 потоком проти ≈ 395 мс без обмеження й ≈ 375 мс з 2) |
+| `DEVICE`, `MAX_UPLOAD_MB`, `MAX_PIXELS`, `MAX_IMAGE_SIDE`, `MAX_CONCURRENT_INFERENCES`, `MAX_QUEUE`, `LOW_CONFIDENCE_THRESHOLD`, `NOT_MRI_COLOR_MAX`, `NOT_MRI_NOISE_MAX`, `NOT_MRI_STD_MIN`, `NOT_MRI_LOWCONTRAST_STD`, `NOT_MRI_DARK_MIN`, `NOT_MRI_OPAQUE_MIN`, `ALLOWED_HOSTS`, `ENABLE_DOCS`, `RATE_LIMIT_ENABLED`, `RATE_LIMIT_PREDICT_PER_MINUTE`, `RATE_LIMIT_WRITE_PER_MINUTE`, `RATE_LIMIT_READ_PER_MINUTE`, `RATE_LIMIT_AUTH_PER_MINUTE`, `SESSION_TTL_HOURS`, `SESSION_COOKIE_NAME`, `SESSION_COOKIE_SECURE`, `SESSION_MAX_PER_USER`, `LOGIN_FAILURES_MAX`, `LOGIN_FAILURES_WINDOW_MINUTES` | як у бекенді | Передаються бекенду; `MAX_UPLOAD_MB` отримує ще й збірка інтерфейсу як `VITE_MAX_UPLOAD_MB`. Якщо підняти `MAX_UPLOAD_MB` вище за 10, треба змінити `client_max_body_size` у `frontend/nginx.conf` і перезібрати `frontend`. `TRUSTED_PROXIES` Compose задає сам (адреса `frontend`) |
 | `ALLOWED_ORIGINS` | як у бекенді, але порт API береться з `API_PORT`, і додано `http://localhost:8080`, `http://127.0.0.1:8080` | Передається бекенду; якщо змінили `API_PORT`, Swagger UI однаково працює. Адреси з портом 8080 — сторінки інтерфейсу з `frontend` |
 
 `MODEL_PATH` і `MODEL_VERSION` для сервісу `api` задано в `docker-compose.yml`.
